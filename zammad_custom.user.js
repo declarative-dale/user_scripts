@@ -7,7 +7,7 @@
 // @require            https://code.jquery.com/jquery-3.6.0.min.js
 // @require            https://cdn.jsdelivr.net/gh/CoeJoder/waitForKeyElements.js@v1.2/waitForKeyElements.js
 // @require            https://cdn.jsdelivr.net/npm/hotkeys-js@3.13.7/dist/hotkeys.min.js
-// @require            https://openuserjs.org/src/libs/sizzle/GM_config.js
+// @require            https://cdn.jsdelivr.net/gh/sizzlemctwizzle/GM_config@master/gm_config.js
 // @grant              GM_getValue
 // @grant              GM_setValue
 // @grant              GM.getValue
