@@ -15,6 +15,7 @@
 // @grant              GM_registerMenuCommand
 // @grant              GM_addStyle
 // @grant              GM_getResourceText
+// @grant              window.close
 // @icon               https://avatars.githubusercontent.com/u/1380327?s=200&v=4
 // @run-at             document-start
 // @description        Customize Zammad
@@ -26,8 +27,6 @@
     'use strict';
 
     console.log(`Starting ${GM_info.script.name} version ${GM_info.script.version}...`);
-
-    checkExistingInstance();
 
     const disabledHotkeys = [
         // {saveName: "disableUpdateClosed", hotkey: "ctrl+shift+c", default: true, desc: "Update as closed"},
@@ -53,6 +52,7 @@
 
         let cfg = buildConfig();
         gmc = new GM_config(cfg);
+        checkExistingInstance();
     };
 
     function buildConfig() {
@@ -313,8 +313,6 @@
             if (location) {
                 var channel = new BroadcastChannel('zammad-tab');
 
-                channel.postMessage({type: 'another-tab', content: location});
-
                 channel.addEventListener('message', function(msg) {
                     const existingTab = gmc.get('existingTab');
                     console.log('message received', existingTab);
@@ -338,6 +336,8 @@
                         }
                     }
                 });
+
+                channel.postMessage({type: 'another-tab', content: location});
             }
         }
         catch (e) {
