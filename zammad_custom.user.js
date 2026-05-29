@@ -1,13 +1,9 @@
 // ==UserScript==
 // @name     Zammad customizations
 // @match    https://help.vates.tech/*
-// @version  2026-05-29
+// @version  1.1.0
 // @license      GPL-v3
 // @author       DanP2
-// @require            https://code.jquery.com/jquery-3.6.0.min.js
-// @require            https://cdn.jsdelivr.net/gh/CoeJoder/waitForKeyElements.js@v1.2/waitForKeyElements.js
-// @require            https://cdn.jsdelivr.net/npm/hotkeys-js@3.13.7/dist/hotkeys.min.js
-// @require            https://cdn.jsdelivr.net/gh/sizzlemctwizzle/GM_config@master/gm_config.js
 // @grant              GM_getValue
 // @grant              GM_setValue
 // @grant              GM.getValue
@@ -28,6 +24,20 @@
 
     console.log(`Starting ${GM_info.script.name} version ${GM_info.script.version}...`);
 
+    const configId = 'zammadCfg';
+    const dependencyUrls = [
+        'https://code.jquery.com/jquery-3.6.0.min.js',
+        'https://cdn.jsdelivr.net/gh/CoeJoder/waitForKeyElements.js@v1.2/waitForKeyElements.js',
+        'https://cdn.jsdelivr.net/npm/hotkeys-js@3.13.7/dist/hotkeys.min.js',
+        'https://cdn.jsdelivr.net/gh/sizzlemctwizzle/GM_config@master/gm_config.js',
+    ];
+
+    let gmc;
+
+    if (!checkExistingInstance()) {
+        return;
+    }
+
     const disabledHotkeys = [
         // {saveName: "disableUpdateClosed", hotkey: "ctrl+shift+c", default: true, desc: "Update as closed"},
       ];
@@ -41,8 +51,9 @@
         {saveName: "addFormatBlock", hotkey: "ctrl+alt+b", default: true, desc: "Format blockquote tag", func: () => selectionToBlockquote()},
       ];
 
-    let gmc;
-    setupScript();
+    loadDependencies()
+        .then(setupScript)
+        .catch((e) => console.error(`${GM_info.script.name} dependency load error:`, e));
 
     function setupScript() {
         GM_addStyle(".ticket-article.extended \
@@ -56,8 +67,6 @@
     };
 
     function buildConfig() {
-
-        const configId = 'zammadCfg';
 
         const iframecss = `
             height: 535px;
@@ -92,7 +101,7 @@
                     label: 'Open in existing tab?',
                     labelPos: 'right',
                     type: 'checkbox',
-                    default: false,
+                    default: true,
                 },
                 ticketExtended: {
                     section: ['Tickets', ''],
@@ -306,43 +315,142 @@
     function checkExistingInstance() {
 
         try {
-            var location = window.location.hash;
-            if (!location) {
-                location = (window.location.origin + '/' === window.location.href) ? '/#dashboard' : false;
+            const targetUrl = getZammadTicketUrl();
+            if (!targetUrl) {
+                return true;
             }
-            if (location) {
-                var channel = new BroadcastChannel('zammad-tab');
 
-                channel.addEventListener('message', function(msg) {
-                    const existingTab = gmc.get('existingTab');
-                    console.log('message received', existingTab);
-                    if (existingTab) {
-                        if (msg.data.type === 'another-tab') {
-                            // Message received from other Zammad tab, reply to it and open its location
-                            channel.postMessage({type: 'i-got-it'});
-                            window.focus();
+            const tabId = getSingleTabId();
+            const channel = new BroadcastChannel('zammad-tab');
+            const establishedKey = 'zammad-ticket-tab-established';
+            const allowLoadKey = 'zammad-ticket-tab-allow-load';
+            let requestHandled = false;
+            let activeRequestId;
 
-                            // if (document.hidden) {
-                            //     App.Event.trigger('notifyDesktop', {
-                            //         title: 'Click here to focus opened Zammad link',
-                            //         timeout: 10000,
-                            //         onclick: function() { window.focus(); },
-                            //     });
-                            // }
+            channel.addEventListener('message', function(msg) {
+                const existingTab = isExistingTabEnabled();
+                const data = msg.data || {};
+                console.log('zammad existing-tab message received', existingTab, data);
 
-                            window.location = window.origin + msg.data.content;
-                        } else if (msg.data.type === 'i-got-it') {
-                            window.close();
-                        }
-                    }
+                if (!existingTab || data.tabId === tabId) {
+                    return;
+                }
+
+                if (data.type === 'zammad-ticket-request') {
+                    channel.postMessage({
+                        type: 'zammad-ticket-accepted',
+                        requestId: data.requestId,
+                        tabId: tabId,
+                    });
+                    window.focus();
+                    window.location.replace(data.url);
+                } else if (data.type === 'zammad-ticket-accepted' && data.requestId === activeRequestId) {
+                    requestHandled = true;
+                    closeDuplicateZammadTab();
+                }
+            });
+
+            if (sessionStorage.getItem(allowLoadKey) === '1') {
+                sessionStorage.removeItem(allowLoadKey);
+                sessionStorage.setItem(establishedKey, '1');
+                console.log('zammad existing ticket tab established', tabId, targetUrl);
+                return true;
+            }
+
+            if (sessionStorage.getItem(establishedKey) === '1') {
+                console.log('zammad existing ticket tab ready', tabId, targetUrl);
+                return true;
+            }
+
+            if (isExistingTabEnabled()) {
+                activeRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                console.log('zammad probing for existing ticket tab', activeRequestId, targetUrl);
+                window.stop();
+                channel.postMessage({
+                    type: 'zammad-ticket-request',
+                    requestId: activeRequestId,
+                    tabId: tabId,
+                    url: targetUrl,
                 });
 
-                channel.postMessage({type: 'another-tab', content: location});
+                setTimeout(function() {
+                    if (requestHandled) {
+                        return;
+                    }
+
+                    sessionStorage.setItem(allowLoadKey, '1');
+                    window.location.replace(targetUrl);
+                }, 750);
+
+                return false;
             }
+
+            return true;
         }
         catch (e) {
             console.error('checkExistingInstance error:', e);
+            return true;
         }
+    }
+
+    function getZammadTicketUrl() {
+        return window.location.hash.startsWith('#ticket/') ? window.location.href : false;
+    }
+
+    function isExistingTabEnabled() {
+        if (gmc) {
+            return gmc.get('existingTab');
+        }
+
+        try {
+            const savedConfig = GM_getValue(configId, null);
+            if (!savedConfig) {
+                return true;
+            }
+
+            const parsedConfig = (typeof savedConfig === 'string') ? JSON.parse(savedConfig) : savedConfig;
+            return Object.prototype.hasOwnProperty.call(parsedConfig, 'existingTab') ? Boolean(parsedConfig.existingTab) : true;
+        } catch (e) {
+            console.error('existingTab config read error:', e);
+            return true;
+        }
+    }
+
+    function getSingleTabId() {
+        const key = 'zammad-ticket-tab-id';
+        let tabId = sessionStorage.getItem(key);
+        if (!tabId) {
+            tabId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            sessionStorage.setItem(key, tabId);
+        }
+        return tabId;
+    }
+
+    function closeDuplicateZammadTab() {
+        console.log('zammad closing duplicate ticket tab');
+        window.stop();
+        window.close();
+        setTimeout(() => {
+            window.close();
+            window.location.replace('about:blank');
+        }, 50);
+        setTimeout(() => window.close(), 250);
+    }
+
+    async function loadDependencies() {
+        for (const url of dependencyUrls) {
+            await loadDependency(url);
+        }
+    }
+
+    async function loadDependency(url) {
+        const response = await fetch(url, {cache: 'force-cache'});
+        if (!response.ok) {
+            throw new Error(`Failed to load ${url}: ${response.status}`);
+        }
+
+        const code = await response.text();
+        (0, eval)(`${code}\n//# sourceURL=${url}`);
     }
 
     // const closeTicket = () => {
