@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name     Zammad customizations
 // @match    https://help.vates.tech/*
-// @version  1.1.13
+// @version  1.1.15
 // @license      GPL-v3
 // @author       DanP2
 // @grant              GM_getValue
@@ -12,14 +12,13 @@
 // @grant              GM_addStyle
 // @grant              GM_xmlhttpRequest
 // @grant              window.close
-// @connect            code.jquery.com
 // @connect            cdn.jsdelivr.net
 // @icon               https://avatars.githubusercontent.com/u/1380327?s=200&v=4
 // @run-at             document-start
 // @description        Customize Zammad
 // ==/UserScript==
 
-/* global GM_info, GM_config, GM_registerMenuCommand, GM_addStyle, GM_xmlhttpRequest, $, waitForKeyElements */
+/* global GM_getValue, GM_info, GM_registerMenuCommand, GM_addStyle, GM_xmlhttpRequest, waitForKeyElements */
 
 (function() {
     'use strict';
@@ -38,14 +37,12 @@
         probeDelay: 750,
     };
     const dependencies = [
-        ['jQuery', 'https://code.jquery.com/jquery-3.6.0.min.js'],
         ['waitForKeyElements', 'https://cdn.jsdelivr.net/gh/CoeJoder/waitForKeyElements.js@v1.2/waitForKeyElements.js'],
         ['GM_config', 'https://cdn.jsdelivr.net/gh/sizzlemctwizzle/GM_config@master/gm_config.js'],
     ];
 
     let gmc;
     let GMConfig;
-    let hotkeyHandler;
     const isMac = navigator.platform.toUpperCase().includes('MAC');
 
     if (!checkExistingInstance()) {
@@ -57,8 +54,8 @@
         {saveName: 'addExpandAll', key: 'x', code: 'KeyX', default: true, desc: 'Expand all articles', func: () => collapseEntries(false)},
         {saveName: 'addClearDups', key: 'n', code: 'KeyN', default: true, desc: 'Clear duplicate notifications', func: () => clearNotifications()},
         {saveName: 'addReplyLast', key: 'l', code: 'KeyL', default: true, desc: 'Reply to last response', func: () => replyLast()},
-        {saveName: 'addFormatCode', key: 'c', code: 'KeyC', default: true, desc: 'Format code tag', selectionOnly: true, func: () => selectionToPreCode()},
-        {saveName: 'addFormatBlock', key: 'b', code: 'KeyB', default: true, desc: 'Format blockquote tag', selectionOnly: true, func: () => selectionToBlockquote()},
+        {saveName: 'addFormatCode', key: 'c', code: 'KeyC', default: true, desc: 'Format code tag', selectionOnly: true, func: () => wrapSelection('pre', 'code')},
+        {saveName: 'addFormatBlock', key: 'b', code: 'KeyB', default: true, desc: 'Format blockquote tag', selectionOnly: true, func: () => wrapSelection('blockquote')},
     ];
 
     loadDependencies()
@@ -79,7 +76,7 @@
         }
 
         gmc = new GMConfig(buildConfig());
-        setupHotkeys();
+        document.addEventListener('keydown', handleHotkey, true);
     }
 
     function buildConfig() {
@@ -138,19 +135,13 @@
         GM_registerMenuCommand('Settings', () => gmc.open());
 
         waitForKeyElements(popoverSelector, (element) => {
-            $(element).on('click', notificationLinkSelector, (event) => {
-                if (!gmc.get('closeNotification') || (gmc.get('requireAlt') && !event.altKey)) {
+            element.addEventListener('click', (event) => {
+                const link = getEventElement(event)?.closest(notificationLinkSelector);
+                if (!link || !gmc.get('closeNotification') || (gmc.get('requireAlt') && !event.altKey)) {
                     return;
                 }
 
-                const removeButton = $(event.currentTarget)
-                    .closest('.activity-entry')
-                    .find(activityRemoveSelector)
-                    .get(0);
-
-                if (removeButton) {
-                    removeButton.click();
-                }
+                link.closest('.activity-entry')?.querySelector(activityRemoveSelector)?.click();
             });
         });
 
@@ -158,37 +149,46 @@
             onElementInserted(element, ticketItemSelector, triggerHashChange);
         });
 
-        $('body').on('click', '.textBubble', (event) => {
-            if (!gmc.get('articleResize') || !event.ctrlKey) {
+        document.body.addEventListener('click', (event) => {
+            const bubble = getEventElement(event)?.closest('.textBubble');
+            if (!bubble || !gmc.get('articleResize') || !event.ctrlKey) {
                 return;
             }
 
             event.stopImmediatePropagation();
-            $(event.currentTarget).find('.js-toggleFold:visible').trigger('click');
+            Array.from(bubble.querySelectorAll('.js-toggleFold'))
+                .find(isVisible)
+                ?.click();
         });
 
         const applyTicketDisplaySettings = () => {
-            const blockedMessages = $(blockedContentSelector);
-            const tickets = $(ticketSelector);
+            const hideBlocked = gmc.get('articleHideBlocked');
+            const extended = gmc.get('ticketExtended');
 
-            blockedMessages.toggle(!gmc.get('articleHideBlocked'));
-            tickets.toggleClass('extended', gmc.get('ticketExtended'));
+            document.querySelectorAll(blockedContentSelector)
+                .forEach((message) => {
+                    message.style.display = hideBlocked ? 'none' : '';
+                });
+            document.querySelectorAll(ticketSelector)
+                .forEach((ticket) => ticket.classList.toggle('extended', extended));
         };
 
-        $(window).on('hashchange', applyTicketDisplaySettings);
+        window.addEventListener('hashchange', applyTicketDisplaySettings);
         applyTicketDisplaySettings();
-        setupHotkeys();
         debug(`Successfully started ${GM_info.script.name} version ${GM_info.script.version}`);
     }
 
     function onSave() {
         gmc.close();
-        setupHotkeys();
         triggerHashChange();
     }
 
     function triggerHashChange() {
         window.dispatchEvent(new HashChangeEvent('hashchange'));
+    }
+
+    function isVisible(element) {
+        return Boolean(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
     }
 
     function onElementInserted(container, elementSelector, callback) {
@@ -219,27 +219,16 @@
         return observer;
     }
 
-    function setupHotkeys() {
-        if (hotkeyHandler) {
-            document.removeEventListener('keydown', hotkeyHandler, true);
+    function handleHotkey(event) {
+        const hotkey = getMatchingHotkey(event);
+        if (!hotkey) {
+            return;
         }
 
-        hotkeyHandler = (event) => {
-            const hotkey = getMatchingHotkey(event);
-            if (!hotkey) {
-                return;
-            }
-
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            debug(`Running "${hotkey.desc}" hotkey (${formatHotkey(hotkey)})`);
-
-            if (typeof hotkey.func === 'function') {
-                hotkey.func(hotkey);
-            }
-        };
-
-        document.addEventListener('keydown', hotkeyHandler, true);
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        debug(`Running "${hotkey.desc}" hotkey (${formatHotkey(hotkey)})`);
+        hotkey.func(hotkey);
     }
 
     function getMatchingHotkey(event) {
@@ -467,21 +456,23 @@
         const activityLinkSelector = 'div.activity-body a.activity-message';
         const activityRemoveSelector = 'div.activity-remove';
         const entries = Array.from(document.querySelectorAll(activitySelector)).reverse();
-        const countByTicket = {};
+        const countByTicket = new Map();
 
         entries.forEach((entry) => {
             const ticket = getNotificationTicket(entry, activityLinkSelector);
             if (ticket) {
-                countByTicket[ticket] = (countByTicket[ticket] || 0) + 1;
+                countByTicket.set(ticket, (countByTicket.get(ticket) || 0) + 1);
             }
         });
 
         entries.forEach((entry) => {
             const ticket = getNotificationTicket(entry, activityLinkSelector);
             const removeButton = entry.querySelector(activityRemoveSelector);
-            if (ticket && removeButton && countByTicket[ticket] > 1) {
+            const count = countByTicket.get(ticket) || 0;
+
+            if (ticket && removeButton && count > 1) {
                 removeButton.click();
-                countByTicket[ticket]--;
+                countByTicket.set(ticket, count - 1);
             }
         });
     };
@@ -491,48 +482,57 @@
         return href.match(/\d+/)?.[0] || null;
     }
 
-    const replyLast = () => {
-        const articles = Array.from(document.querySelectorAll('div.ticket-article-item:not(.is-internal)'));
-        const response = articles.filter((article) => article.classList.contains('customer')).pop()
-            || articles.filter((article) => article.classList.contains('agent')).pop();
-        const actions = response ? Array.from(response.querySelectorAll("a.article-action[data-type^='emailReply']")) : [];
-        const action = actions.pop();
-
-        if (action) {
-            action.click();
+    function findLastArticleByClass(...classNames) {
+        const articles = document.querySelectorAll('div.ticket-article-item:not(.is-internal)');
+        for (const className of classNames) {
+            for (let index = articles.length - 1; index >= 0; index--) {
+                if (articles[index].classList.contains(className)) {
+                    return articles[index];
+                }
+            }
         }
+
+        return null;
+    }
+
+    const replyLast = () => {
+        const response = findLastArticleByClass('customer', 'agent');
+        Array.from(response?.querySelectorAll("a.article-action[data-type^='emailReply']") || [])
+            .pop()
+            ?.click();
     };
 
-    const selectionToBlockquote = () => {
-        wrapSelection(() => {
-            const wrapper = document.createElement('blockquote');
-            return {wrapper, target: wrapper};
-        });
-    };
-
-    const selectionToPreCode = () => {
-        wrapSelection(() => {
-            const wrapper = document.createElement('pre');
-            const target = document.createElement('code');
-            wrapper.appendChild(target);
-            return {wrapper, target};
-        });
-    };
-
-    function wrapSelection(createWrapper) {
+    function wrapSelection(wrapperTag, targetTag = wrapperTag) {
         const selection = window.getSelection();
         if (!selection || selection.rangeCount === 0) {
             return;
         }
 
         const range = selection.getRangeAt(0);
-        const {wrapper, target} = createWrapper();
+        const wrapper = document.createElement(wrapperTag);
+        const target = targetTag === wrapperTag ? wrapper : document.createElement(targetTag);
+
+        if (target !== wrapper) {
+            wrapper.appendChild(target);
+        }
+
         target.appendChild(range.extractContents());
         range.insertNode(wrapper);
     }
 
-    const customHotkeysFilter = (event, hotkey) => {
+    function getEventElement(event) {
         const target = event.target || event.srcElement;
+        return target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
+    }
+
+    function isEditableElement(element) {
+        const tagName = element.tagName;
+        return element.isContentEditable
+            || ((tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') && !element.readOnly);
+    }
+
+    const customHotkeysFilter = (event, hotkey) => {
+        const target = getEventElement(event);
         if (!target) {
             return true;
         }
@@ -545,10 +545,6 @@
             return !hotkey.selectionOnly;
         }
 
-        const tagName = target.tagName;
-        return !(
-            target.isContentEditable
-            || ((tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') && !target.readOnly)
-        );
+        return !isEditableElement(target);
     };
 })();
