@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name     Zammad customizations
 // @match    https://help.vates.tech/*
-// @version  1.1.1
+// @version  1.1.2
 // @license      GPL-v3
 // @author       DanP2
 // @grant              GM_getValue
@@ -16,7 +16,7 @@
 // @description        Customize Zammad
 // ==/UserScript==
 
-/* global GM_info, GM_config, GM_registerMenuCommand, GM_addStyle, $, hotkeys, waitForKeyElements */
+/* global GM_info, GM_config, GM_registerMenuCommand, GM_addStyle, $, waitForKeyElements */
 
 (function() {
     'use strict';
@@ -37,23 +37,23 @@
     const dependencies = [
         ['jQuery', 'https://code.jquery.com/jquery-3.6.0.min.js'],
         ['waitForKeyElements', 'https://cdn.jsdelivr.net/gh/CoeJoder/waitForKeyElements.js@v1.2/waitForKeyElements.js'],
-        ['hotkeys', 'https://cdn.jsdelivr.net/npm/hotkeys-js@3.13.7/dist/hotkeys.min.js'],
         ['GM_config', 'https://cdn.jsdelivr.net/gh/sizzlemctwizzle/GM_config@master/gm_config.js'],
     ];
 
     let gmc;
+    let hotkeyHandler;
 
     if (!checkExistingInstance()) {
         return;
     }
 
     const addedHotkeys = [
-        {saveName: 'addCollapseAll', hotkey: 'ctrl+alt+z', default: true, desc: 'Collapse all articles', func: () => collapseEntries(true)},
-        {saveName: 'addExpandAll', hotkey: 'ctrl+alt+x', default: true, desc: 'Expand all articles', func: () => collapseEntries(false)},
-        {saveName: 'addClearDups', hotkey: 'ctrl+alt+n', default: true, desc: 'Clear duplicate notifications', func: () => clearNotifications()},
-        {saveName: 'addReplyLast', hotkey: 'ctrl+alt+l', default: true, desc: 'Reply to last response', func: () => replyLast()},
-        {saveName: 'addFormatCode', hotkey: 'ctrl+alt+c', default: true, desc: 'Format code tag', func: () => selectionToPreCode()},
-        {saveName: 'addFormatBlock', hotkey: 'ctrl+alt+b', default: true, desc: 'Format blockquote tag', func: () => selectionToBlockquote()},
+        {saveName: 'addCollapseAll', key: 'z', code: 'KeyZ', default: true, desc: 'Collapse all articles', func: () => collapseEntries(true)},
+        {saveName: 'addExpandAll', key: 'x', code: 'KeyX', default: true, desc: 'Expand all articles', func: () => collapseEntries(false)},
+        {saveName: 'addClearDups', key: 'n', code: 'KeyN', default: true, desc: 'Clear duplicate notifications', func: () => clearNotifications()},
+        {saveName: 'addReplyLast', key: 'l', code: 'KeyL', default: true, desc: 'Reply to last response', func: () => replyLast()},
+        {saveName: 'addFormatCode', key: 'c', code: 'KeyC', default: true, desc: 'Format code tag', func: () => selectionToPreCode()},
+        {saveName: 'addFormatBlock', key: 'b', code: 'KeyB', default: true, desc: 'Format blockquote tag', func: () => selectionToBlockquote()},
     ];
 
     loadDependencies()
@@ -106,7 +106,7 @@
 
         addedHotkeys.forEach((hotkey, index) => {
             cfg.fields[hotkey.saveName] = checkbox(
-                `Enable "${hotkey.desc}"? (${hotkey.hotkey})`,
+                `Enable "${hotkey.desc}"? (${formatHotkey(hotkey)})`,
                 hotkey.default,
                 index === 0 ? ['Hotkeys', 'Add hotkeys'] : null,
             );
@@ -209,21 +209,47 @@
     }
 
     function setupHotkeys() {
-        hotkeys.unbind();
-        hotkeys.filter = customHotkeysFilter;
+        if (hotkeyHandler) {
+            document.removeEventListener('keydown', hotkeyHandler, true);
+        }
 
-        addedHotkeys.forEach((hotkey) => {
-            if (!gmc.get(hotkey.saveName)) {
+        hotkeyHandler = (event) => {
+            const hotkey = getMatchingHotkey(event);
+            if (!hotkey) {
                 return;
             }
 
-            debug(`Adding "${hotkey.desc}" hotkey (${hotkey.hotkey})`);
-            hotkeys(hotkey.hotkey, () => {
-                if (typeof hotkey.func === 'function') {
-                    hotkey.func(hotkey);
-                }
-            });
-        });
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            debug(`Running "${hotkey.desc}" hotkey (${formatHotkey(hotkey)})`);
+
+            if (typeof hotkey.func === 'function') {
+                hotkey.func(hotkey);
+            }
+        };
+
+        document.addEventListener('keydown', hotkeyHandler, true);
+    }
+
+    function getMatchingHotkey(event) {
+        if (
+            event.defaultPrevented
+            || event.repeat
+            || event.metaKey
+            || event.shiftKey
+            || !event.ctrlKey
+            || !event.altKey
+            || event.getModifierState?.('AltGraph')
+            || !customHotkeysFilter(event)
+        ) {
+            return null;
+        }
+
+        return addedHotkeys.find((hotkey) => event.code === hotkey.code && gmc.get(hotkey.saveName)) || null;
+    }
+
+    function formatHotkey(hotkey) {
+        return `ctrl+alt/option+${hotkey.key}`;
     }
 
     function checkExistingInstance() {
@@ -482,7 +508,7 @@
             return true;
         }
 
-        if (target.classList?.contains('articleNewEdit-body')) {
+        if (target.closest?.('.articleNewEdit-body')) {
             return true;
         }
 
