@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name     Zammad customizations
 // @match    https://help.vates.tech/*
-// @version  1.1.2
+// @version  1.1.13
 // @license      GPL-v3
 // @author       DanP2
 // @grant              GM_getValue
@@ -10,13 +10,16 @@
 // @grant              GM.setValue
 // @grant              GM_registerMenuCommand
 // @grant              GM_addStyle
+// @grant              GM_xmlhttpRequest
 // @grant              window.close
+// @connect            code.jquery.com
+// @connect            cdn.jsdelivr.net
 // @icon               https://avatars.githubusercontent.com/u/1380327?s=200&v=4
 // @run-at             document-start
 // @description        Customize Zammad
 // ==/UserScript==
 
-/* global GM_info, GM_config, GM_registerMenuCommand, GM_addStyle, $, waitForKeyElements */
+/* global GM_info, GM_config, GM_registerMenuCommand, GM_addStyle, GM_xmlhttpRequest, $, waitForKeyElements */
 
 (function() {
     'use strict';
@@ -41,7 +44,9 @@
     ];
 
     let gmc;
+    let GMConfig;
     let hotkeyHandler;
+    const isMac = navigator.platform.toUpperCase().includes('MAC');
 
     if (!checkExistingInstance()) {
         return;
@@ -52,8 +57,8 @@
         {saveName: 'addExpandAll', key: 'x', code: 'KeyX', default: true, desc: 'Expand all articles', func: () => collapseEntries(false)},
         {saveName: 'addClearDups', key: 'n', code: 'KeyN', default: true, desc: 'Clear duplicate notifications', func: () => clearNotifications()},
         {saveName: 'addReplyLast', key: 'l', code: 'KeyL', default: true, desc: 'Reply to last response', func: () => replyLast()},
-        {saveName: 'addFormatCode', key: 'c', code: 'KeyC', default: true, desc: 'Format code tag', func: () => selectionToPreCode()},
-        {saveName: 'addFormatBlock', key: 'b', code: 'KeyB', default: true, desc: 'Format blockquote tag', func: () => selectionToBlockquote()},
+        {saveName: 'addFormatCode', key: 'c', code: 'KeyC', default: true, desc: 'Format code tag', selectionOnly: true, func: () => selectionToPreCode()},
+        {saveName: 'addFormatBlock', key: 'b', code: 'KeyB', default: true, desc: 'Format blockquote tag', selectionOnly: true, func: () => selectionToBlockquote()},
     ];
 
     loadDependencies()
@@ -68,7 +73,13 @@
 
     function setupScript() {
         GM_addStyle('.ticket-article.extended { max-width: 10000px; }');
-        gmc = new GM_config(buildConfig());
+        if (!GMConfig) {
+            console.error(`${GM_info.script.name}: GM_config is not loaded`);
+            return;
+        }
+
+        gmc = new GMConfig(buildConfig());
+        setupHotkeys();
     }
 
     function buildConfig() {
@@ -239,13 +250,13 @@
             || event.shiftKey
             || !event.ctrlKey
             || !event.altKey
-            || event.getModifierState?.('AltGraph')
-            || !customHotkeysFilter(event)
+            || (!isMac && event.getModifierState?.('AltGraph'))
         ) {
             return null;
         }
 
-        return addedHotkeys.find((hotkey) => event.code === hotkey.code && gmc.get(hotkey.saveName)) || null;
+        const hotkey = addedHotkeys.find((entry) => event.code === entry.code && gmc.get(entry.saveName));
+        return hotkey && customHotkeysFilter(event, hotkey) ? hotkey : null;
     }
 
     function formatHotkey(hotkey) {
@@ -405,18 +416,36 @@
     async function loadDependencies() {
         for (const [name, url] of dependencies) {
             debug(`Loading ${name}`);
-            await loadDependency(url);
+            await loadDependency(name, url);
         }
     }
 
-    async function loadDependency(url) {
-        const response = await fetch(url, {cache: 'force-cache'});
-        if (!response.ok) {
-            throw new Error(`Failed to load ${url}: ${response.status}`);
+    async function loadDependency(name, url) {
+        const code = await getDependencyCode(url);
+        if (name === 'GM_config') {
+            GMConfig = eval(`${code}\nGM_config;`); // eslint-disable-line no-eval
+            return;
         }
 
-        const code = await response.text();
         (0, eval)(`${code}\n//# sourceURL=${url}`);
+    }
+
+    function getDependencyCode(url) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url,
+                onload: (response) => {
+                    if (response.status >= 200 && response.status < 300) {
+                        resolve(response.responseText);
+                    } else {
+                        reject(new Error(`Failed to load ${url}: ${response.status}`));
+                    }
+                },
+                onerror: () => reject(new Error(`Failed to load ${url}`)),
+                ontimeout: () => reject(new Error(`Timed out loading ${url}`)),
+            });
+        });
     }
 
     const collapseEntries = (collapse = false, root = document) => {
@@ -502,7 +531,7 @@
         range.insertNode(wrapper);
     }
 
-    const customHotkeysFilter = (event) => {
+    const customHotkeysFilter = (event, hotkey) => {
         const target = event.target || event.srcElement;
         if (!target) {
             return true;
@@ -510,6 +539,10 @@
 
         if (target.closest?.('.articleNewEdit-body')) {
             return true;
+        }
+
+        if (target.closest?.('.ticket-title-update, .js-objectTitle')) {
+            return !hotkey.selectionOnly;
         }
 
         const tagName = target.tagName;
