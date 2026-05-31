@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name     Zammad customizations
 // @match    https://help.vates.tech/*
-// @version  1.1.15
+// @version  1.1.17
 // @license      GPL-v3
 // @author       DanP2
 // @grant              GM_getValue
@@ -23,10 +23,10 @@
 (function() {
     'use strict';
 
-    const DEBUG = false;
     const HELP_ORIGIN = 'https://help.vates.tech';
     const KB_PATH = '/kb';
     const configId = 'zammadCfg';
+    const LOG_PREFIX = '[zammad-custom]';
     const singleTab = {
         channelName: 'zammad-tab',
         tabIdKey: 'zammad-ticket-tab-id',
@@ -60,18 +60,27 @@
 
     loadDependencies()
         .then(setupScript)
-        .catch((e) => console.error(`${GM_info.script.name} dependency load error:`, e));
+        .catch((e) => logFailure('dependency load error:', e));
 
     function debug(...args) {
-        if (DEBUG) {
-            console.log(...args);
+        if (gmc?.get?.('debugLogging')) {
+            console.log(LOG_PREFIX, ...args);
         }
+    }
+
+    function logFailure(message, error) {
+        if (error) {
+            console.error(`${LOG_PREFIX} ${message}`, error);
+            return;
+        }
+
+        console.error(`${LOG_PREFIX} ${message}`);
     }
 
     function setupScript() {
         GM_addStyle('.ticket-article.extended { max-width: 10000px; }');
         if (!GMConfig) {
-            console.error(`${GM_info.script.name}: GM_config is not loaded`);
+            logFailure('GM_config is not loaded');
             return;
         }
 
@@ -105,6 +114,7 @@
                 ticketExtended: checkbox('Use extended view?', false, ['Tickets', '']),
                 articleResize: checkbox('Control click to expand / collapse?', true, ['Articles', '']),
                 articleHideBlocked: checkbox('Hide blocked remote content message?', true),
+                debugLogging: checkbox('Enable debug logging?', false, ['Diagnostics', '']),
             },
             events: {
                 init: onInit,
@@ -267,7 +277,7 @@
             channel.addEventListener('message', (message) => {
                 const existingTab = isExistingTabEnabled();
                 const data = message.data || {};
-                debug('zammad existing-tab message received', existingTab, data);
+                debug('single-tab message received');
 
                 if (!existingTab || data.tabId === tabId) {
                     return;
@@ -301,7 +311,7 @@
             }
 
             if (sessionStorage.getItem(singleTab.establishedKey) === '1') {
-                debug('zammad existing tab ready', tabId, targetUrl);
+                debug('single-tab already established');
                 return true;
             }
 
@@ -311,7 +321,7 @@
             }
 
             activeRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            debug('zammad probing for existing tab', activeRequestId, targetUrl);
+            debug('single-tab probe started');
             window.stop();
             channel.postMessage({
                 type: singleTab.requestType,
@@ -331,7 +341,7 @@
 
             return false;
         } catch (e) {
-            console.error('checkExistingInstance error:', e);
+            logFailure('single-tab guard error:', e);
             return true;
         }
     }
@@ -348,8 +358,8 @@
         try {
             const parsedUrl = new URL(url, window.location.href);
             return isReusableHelpLocation(parsedUrl);
-        } catch (e) {
-            console.error('help URL parse error:', e);
+        } catch {
+            debug('single-tab ignored invalid URL');
             return false;
         }
     }
@@ -372,7 +382,7 @@
             const parsedConfig = typeof savedConfig === 'string' ? JSON.parse(savedConfig) : savedConfig;
             return Object.prototype.hasOwnProperty.call(parsedConfig, 'existingTab') ? Boolean(parsedConfig.existingTab) : true;
         } catch (e) {
-            console.error('existingTab config read error:', e);
+            logFailure('existingTab setting read error:', e);
             return true;
         }
     }
@@ -388,11 +398,11 @@
 
     function markSingleTabEstablished(tabId, targetUrl) {
         sessionStorage.setItem(singleTab.establishedKey, '1');
-        debug('zammad existing tab established', tabId, targetUrl);
+        debug('single-tab established');
     }
 
     function closeDuplicateZammadTab() {
-        debug('zammad closing duplicate tab');
+        debug('single-tab duplicate closing');
         window.stop();
         window.close();
         setTimeout(() => {
