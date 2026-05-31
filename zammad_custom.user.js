@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name     Zammad customizations
 // @match    https://help.vates.tech/*
-// @version  1.1.0
+// @version  1.1.1
 // @license      GPL-v3
 // @author       DanP2
 // @grant              GM_getValue
@@ -10,26 +10,35 @@
 // @grant              GM.setValue
 // @grant              GM_registerMenuCommand
 // @grant              GM_addStyle
-// @grant              GM_getResourceText
 // @grant              window.close
 // @icon               https://avatars.githubusercontent.com/u/1380327?s=200&v=4
 // @run-at             document-start
 // @description        Customize Zammad
 // ==/UserScript==
 
-/* global GM_info, GM_config, GM_registerMenuCommand, GM_addStyle, jQuery, $, hotkeys, waitForKeyElements */
+/* global GM_info, GM_config, GM_registerMenuCommand, GM_addStyle, $, hotkeys, waitForKeyElements */
 
 (function() {
     'use strict';
 
-    console.log(`Starting ${GM_info.script.name} version ${GM_info.script.version}...`);
-
+    const DEBUG = false;
+    const HELP_ORIGIN = 'https://help.vates.tech';
+    const KB_PATH = '/kb';
     const configId = 'zammadCfg';
-    const dependencyUrls = [
-        'https://code.jquery.com/jquery-3.6.0.min.js',
-        'https://cdn.jsdelivr.net/gh/CoeJoder/waitForKeyElements.js@v1.2/waitForKeyElements.js',
-        'https://cdn.jsdelivr.net/npm/hotkeys-js@3.13.7/dist/hotkeys.min.js',
-        'https://cdn.jsdelivr.net/gh/sizzlemctwizzle/GM_config@master/gm_config.js',
+    const singleTab = {
+        channelName: 'zammad-tab',
+        tabIdKey: 'zammad-ticket-tab-id',
+        establishedKey: 'zammad-ticket-tab-established',
+        allowLoadKey: 'zammad-ticket-tab-allow-load',
+        requestType: 'zammad-ticket-request',
+        acceptedType: 'zammad-ticket-accepted',
+        probeDelay: 750,
+    };
+    const dependencies = [
+        ['jQuery', 'https://code.jquery.com/jquery-3.6.0.min.js'],
+        ['waitForKeyElements', 'https://cdn.jsdelivr.net/gh/CoeJoder/waitForKeyElements.js@v1.2/waitForKeyElements.js'],
+        ['hotkeys', 'https://cdn.jsdelivr.net/npm/hotkeys-js@3.13.7/dist/hotkeys.min.js'],
+        ['GM_config', 'https://cdn.jsdelivr.net/gh/sizzlemctwizzle/GM_config@master/gm_config.js'],
     ];
 
     let gmc;
@@ -38,201 +47,127 @@
         return;
     }
 
-    const disabledHotkeys = [
-        // {saveName: "disableUpdateClosed", hotkey: "ctrl+shift+c", default: true, desc: "Update as closed"},
-      ];
-
-      const addedHotkeys = [
-        {saveName: "addCollapseAll", hotkey: "ctrl+alt+z", default: true, desc: "Collapse all articles", func: () => collapseEntries(true)},
-        {saveName: "addExpandAll", hotkey: "ctrl+alt+x", default: true, desc: "Expand all articles", func: () => collapseEntries(false)},
-        {saveName: "addClearDups", hotkey: "ctrl+alt+n", default: true, desc: "Clear duplicate notifications", func: () => clearNotifications()},
-        {saveName: "addReplyLast", hotkey: "ctrl+alt+l", default: true, desc: "Reply to last response", func: () => replyLast()},
-        {saveName: "addFormatCode", hotkey: "ctrl+alt+c", default: true, desc: "Format code tag", func: () => selectionToPreCode()},
-        {saveName: "addFormatBlock", hotkey: "ctrl+alt+b", default: true, desc: "Format blockquote tag", func: () => selectionToBlockquote()},
-      ];
+    const addedHotkeys = [
+        {saveName: 'addCollapseAll', hotkey: 'ctrl+alt+z', default: true, desc: 'Collapse all articles', func: () => collapseEntries(true)},
+        {saveName: 'addExpandAll', hotkey: 'ctrl+alt+x', default: true, desc: 'Expand all articles', func: () => collapseEntries(false)},
+        {saveName: 'addClearDups', hotkey: 'ctrl+alt+n', default: true, desc: 'Clear duplicate notifications', func: () => clearNotifications()},
+        {saveName: 'addReplyLast', hotkey: 'ctrl+alt+l', default: true, desc: 'Reply to last response', func: () => replyLast()},
+        {saveName: 'addFormatCode', hotkey: 'ctrl+alt+c', default: true, desc: 'Format code tag', func: () => selectionToPreCode()},
+        {saveName: 'addFormatBlock', hotkey: 'ctrl+alt+b', default: true, desc: 'Format blockquote tag', func: () => selectionToBlockquote()},
+    ];
 
     loadDependencies()
         .then(setupScript)
         .catch((e) => console.error(`${GM_info.script.name} dependency load error:`, e));
 
-    function setupScript() {
-        GM_addStyle(".ticket-article.extended \
-            { \
-                max-width:10000px; \
-            }");
+    function debug(...args) {
+        if (DEBUG) {
+            console.log(...args);
+        }
+    }
 
-        let cfg = buildConfig();
-        gmc = new GM_config(cfg);
-        checkExistingInstance();
-    };
+    function setupScript() {
+        GM_addStyle('.ticket-article.extended { max-width: 10000px; }');
+        gmc = new GM_config(buildConfig());
+    }
 
     function buildConfig() {
-
-        const iframecss = `
-            height: 535px;
-            width: 435px;
-            border: 1px solid;
-            border-radius: 3px;
-            position: fixed;
-            z-index: 9999;
-            `;
-
-        let cfg = {
-            'id': configId, // The id used for this instance of GM_config
-            title: "Script Settings",
-            frameStyle: iframecss,
-            'fields': // Fields object
-            {
-                closeNotification: {
-                    section: [ 'Notifications', ''],
-                    label: 'Close notifications when clicked?',
-                    labelPos: 'right',
-                    type: 'checkbox',
-                    default: true,
-                },
-                requireAlt: {
-                    label: 'Require Alt key?',
-                    labelPos: 'right',
-                    type: 'checkbox',
-                    default: false,
-                },
-                existingTab:{
-                    section: ['External Links', ''],
-                    label: 'Open in existing tab?',
-                    labelPos: 'right',
-                    type: 'checkbox',
-                    default: true,
-                },
-                ticketExtended: {
-                    section: ['Tickets', ''],
-                    label: 'Use extended view?',
-                    labelPos: 'right',
-                    type: 'checkbox',
-                    default: false,
-                },
-                articleResize: {
-                    section: ['Articles', ''],
-                    label: 'Control click to expand / collapse?',
-                    labelPos: 'right',
-                    type: 'checkbox',
-                    default: true,
-                },
-                articleHideBlocked: {
-                    label: 'Hide blocked remote content message?',
-                    labelPos: 'right',
-                    type: 'checkbox',
-                    default: true,
-                },
+        const checkbox = (label, defaultValue, section) => ({
+            ...(section ? {section} : {}),
+            label,
+            labelPos: 'right',
+            type: 'checkbox',
+            default: defaultValue,
+        });
+        const cfg = {
+            id: configId,
+            title: 'Script Settings',
+            frameStyle: `
+                height: 535px;
+                width: 435px;
+                border: 1px solid;
+                border-radius: 3px;
+                position: fixed;
+                z-index: 9999;
+            `,
+            fields: {
+                closeNotification: checkbox('Close notifications when clicked?', true, ['Notifications', '']),
+                requireAlt: checkbox('Require Alt key?', false),
+                existingTab: checkbox('Open in existing tab?', true, ['External Links', '']),
+                ticketExtended: checkbox('Use extended view?', false, ['Tickets', '']),
+                articleResize: checkbox('Control click to expand / collapse?', true, ['Articles', '']),
+                articleHideBlocked: checkbox('Hide blocked remote content message?', true),
             },
-            'events': {
-                'init': onInit,
-                'save': onSave,
-            }
+            events: {
+                init: onInit,
+                save: onSave,
+            },
         };
 
-        let addSection = true;
-
-        // Add disable hotkeys
-        disabledHotkeys.forEach(h => {
-            let entry = {label: `Disable "${h.desc}"? (${h.hotkey})`, labelPos: "right", type: "checkbox", default: h.default};
-            if (addSection) {
-                entry.section = ['Hotkeys', 'Remove hotkeys'];
-                addSection = false;
-            }
-            cfg.fields[h.saveName] = entry;
-        });
-
-        addSection = true;
-
-        // Add new hotkeys
-        addedHotkeys.forEach(h => {
-            let entry = {label: `Enable "${h.desc}"? (${h.hotkey})`, labelPos: "right", type: "checkbox", default: h.default};
-            if (addSection) {
-                entry.section = ['', 'Add hotkeys'];
-                addSection = false;
-            }
-            cfg.fields[h.saveName] = entry;
+        addedHotkeys.forEach((hotkey, index) => {
+            cfg.fields[hotkey.saveName] = checkbox(
+                `Enable "${hotkey.desc}"? (${hotkey.hotkey})`,
+                hotkey.default,
+                index === 0 ? ['Hotkeys', 'Add hotkeys'] : null,
+            );
         });
 
         return cfg;
     }
 
-    // initialization complete
     function onInit() {
-        const popoverSelector = "div.popover--notifications";
-        const notificationLinkSelector = "div.js-items > div.activity-entry > div.activity-body > a.activity-message";
-        const activityRemoveSelector = "div.activity-remove";
-        const appSelector = "div#app";
-        const ticketSelector = "div.ticket-article";
-        const ticketItemSelector = "div.ticket-article-item";
-        // const blockedContentSelector = "div.article-meta-permanent";
-        const blockedContentSelector = "div.remote-content-message";
-        const navigationPaneSelector = "div#navigation";
-        const tabCloseSelector = "nav-tab-close-inner";
+        const popoverSelector = 'div.popover--notifications';
+        const notificationLinkSelector = 'div.js-items > div.activity-entry > div.activity-body > a.activity-message';
+        const activityRemoveSelector = 'div.activity-remove';
+        const appSelector = 'div#app';
+        const ticketSelector = 'div.ticket-article';
+        const ticketItemSelector = 'div.ticket-article-item';
+        const blockedContentSelector = 'div.remote-content-message';
 
-        GM_registerMenuCommand('Settings', () => {
-            gmc.open();
-        });
+        GM_registerMenuCommand('Settings', () => gmc.open());
 
         waitForKeyElements(popoverSelector, (element) => {
-            // Close notification on click
-            $(element).on('click', notificationLinkSelector, function(e) {
-                const closeNotification = gmc.get('closeNotification');
-                const requireAlt = gmc.get('requireAlt');
+            $(element).on('click', notificationLinkSelector, (event) => {
+                if (!gmc.get('closeNotification') || (gmc.get('requireAlt') && !event.altKey)) {
+                    return;
+                }
 
-                if (closeNotification) {
-                    if (!requireAlt || e.altKey) {
-                        $(e.currentTarget).next(activityRemoveSelector).trigger("click");
-                    }
+                const removeButton = $(event.currentTarget)
+                    .closest('.activity-entry')
+                    .find(activityRemoveSelector)
+                    .get(0);
+
+                if (removeButton) {
+                    removeButton.click();
                 }
             });
-
-            onElementInserted(appSelector, ticketItemSelector, function() {
-                // console.log("new article added");
-                triggerHashChange();
-            });
         });
 
-        waitForKeyElements(navigationPaneSelector, (element) => {
-            // Track last closed tab
-            $(element).on('click', tabCloseSelector, function(e) {
-                // save href of closing ticket
-                const lastTab = $(e.currentTarget).closest('a')[0].href;
-                gmc.setValue('lastTab', lastTab);
-
-                console.log("tab close detected");
-            });
+        waitForKeyElements(appSelector, (element) => {
+            onElementInserted(element, ticketItemSelector, triggerHashChange);
         });
 
-        // Expand / collapse ticket entry
-        $("body").on('click', '.textBubble', function(e) {
-            const articleResize = gmc.get('articleResize');
-
-            if (articleResize && e.ctrlKey) {
-                e.stopImmediatePropagation();
-                $(e.currentTarget).find(".js-toggleFold:visible").trigger("click");
+        $('body').on('click', '.textBubble', (event) => {
+            if (!gmc.get('articleResize') || !event.ctrlKey) {
+                return;
             }
+
+            event.stopImmediatePropagation();
+            $(event.currentTarget).find('.js-toggleFold:visible').trigger('click');
         });
 
-        // hide blocked content notices
-        $(window).on( 'hashchange', function() {
-            console.log( 'ticket switch detected' );
-            const articleHideBlocked = gmc.get('articleHideBlocked');
-            const ticketExtended = gmc.get('ticketExtended');
+        const applyTicketDisplaySettings = () => {
+            const blockedMessages = $(blockedContentSelector);
+            const tickets = $(ticketSelector);
 
-            if (articleHideBlocked) $(blockedContentSelector).hide();
-            else $(blockedContentSelector).show();
+            blockedMessages.toggle(!gmc.get('articleHideBlocked'));
+            tickets.toggleClass('extended', gmc.get('ticketExtended'));
+        };
 
-            if(ticketExtended) $(ticketSelector).addClass("extended");
-            else $(ticketSelector).removeClass("extended");
-        } );
-
-        // hide content on initial load
-        // triggerHashChange()
-
+        $(window).on('hashchange', applyTicketDisplaySettings);
+        applyTicketDisplaySettings();
         setupHotkeys();
-
-        console.log(`Successfully started ${GM_info.script.name} version ${GM_info.script.version}!`);
+        debug(`Successfully started ${GM_info.script.name} version ${GM_info.script.version}`);
     }
 
     function onSave() {
@@ -242,159 +177,159 @@
     }
 
     function triggerHashChange() {
-        window.dispatchEvent(new HashChangeEvent("hashchange"));
+        window.dispatchEvent(new HashChangeEvent('hashchange'));
     }
 
-    // https://stackoverflow.com/questions/10415400/jquery-detecting-div-of-certain-class-has-been-added-to-dom
-    function onElementInserted(containerSelector, elementSelector, callback) {
+    function onElementInserted(container, elementSelector, callback) {
+        const target = typeof container === 'string' ? document.querySelector(container) : container;
+        const MutationObserver = window.MutationObserver || window.WebKitMutationObserver;
 
-        var onMutationsObserved = function(mutations) {
-            mutations.forEach(function(mutation) {
-                if (mutation.addedNodes.length) {
-                    var elements = $(mutation.addedNodes).find(elementSelector);
-                    for (var i = 0, len = elements.length; i < len; i++) {
-                        callback(elements[i]);
+        if (!target || !MutationObserver) {
+            return null;
+        }
+
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                mutation.addedNodes.forEach((node) => {
+                    if (node.nodeType !== Node.ELEMENT_NODE) {
+                        return;
                     }
-                }
+
+                    if (node.matches(elementSelector)) {
+                        callback(node);
+                    }
+
+                    node.querySelectorAll(elementSelector).forEach(callback);
+                });
             });
-        };
+        });
 
-        var target = $(containerSelector)[0];
-        var config = { childList: true, subtree: true };
-        var MutationObserver = window.MutationObserver || window.WebKitMutationObserver;
-        var observer = new MutationObserver(onMutationsObserved);
-        observer.observe(target, config);
-
+        observer.observe(target, {childList: true, subtree: true});
+        return observer;
     }
 
     function setupHotkeys() {
-        // unbind all hotkeys
         hotkeys.unbind();
-
-        // enable custom hotkey filter
         hotkeys.filter = customHotkeysFilter;
 
-        // build string of hotkeys to disable
-        let hkDisabled = '';
-        let isDisabled, isEnabled;
-
-        disabledHotkeys.forEach(h => {
-            isDisabled = gmc.get(h.saveName);
-
-            if (isDisabled) {
-                console.log(`> Disabling "${h.desc}" hotkey (${h.hotkey})`);
-                hkDisabled = hkDisabled.concat(`${h.hotkey},`);
+        addedHotkeys.forEach((hotkey) => {
+            if (!gmc.get(hotkey.saveName)) {
+                return;
             }
+
+            debug(`Adding "${hotkey.desc}" hotkey (${hotkey.hotkey})`);
+            hotkeys(hotkey.hotkey, () => {
+                if (typeof hotkey.func === 'function') {
+                    hotkey.func(hotkey);
+                }
+            });
         });
-
-        // Override default hotkeys
-        hotkeys(hkDisabled, function(event) {
-            // Prevent the default action
-            event.stopImmediatePropagation();
-            event.preventDefault();
-            console.log(`Blocked ${hotkeys.getPressedKeyString()}`);
-        });
-
-        // Add new hotkeys
-        addedHotkeys.forEach(h => {
-            isEnabled = gmc.get(h.saveName);
-
-            if (isEnabled) {
-                console.log(`> Adding "${h.desc}" hotkey (${h.hotkey})`);
-                hotkeys(h.hotkey, function(){
-                  ("function" === typeof h.func) && h.func(h);
-                });
-            }
-        });
-
-        // console.log(hotkeys.getAllKeyCodes());
     }
 
-    // https://community.zammad.org/t/one-tab-only-addon/10891
-    // https://github.com/Stubenhocker1399/zammad-addon-one-tab-only/blob/master/one-tab-only.js
     function checkExistingInstance() {
-
         try {
-            const targetUrl = getZammadTicketUrl();
+            const targetUrl = getReusableHelpUrl();
             if (!targetUrl) {
                 return true;
             }
 
             const tabId = getSingleTabId();
-            const channel = new BroadcastChannel('zammad-tab');
-            const establishedKey = 'zammad-ticket-tab-established';
-            const allowLoadKey = 'zammad-ticket-tab-allow-load';
+            const channel = new BroadcastChannel(singleTab.channelName);
             let requestHandled = false;
             let activeRequestId;
 
-            channel.addEventListener('message', function(msg) {
+            channel.addEventListener('message', (message) => {
                 const existingTab = isExistingTabEnabled();
-                const data = msg.data || {};
-                console.log('zammad existing-tab message received', existingTab, data);
+                const data = message.data || {};
+                debug('zammad existing-tab message received', existingTab, data);
 
                 if (!existingTab || data.tabId === tabId) {
                     return;
                 }
 
-                if (data.type === 'zammad-ticket-request') {
+                if (data.type === singleTab.requestType) {
+                    if (!isReusableHelpUrl(data.url) || !isReusableHelpLocation(window.location)) {
+                        return;
+                    }
+
                     channel.postMessage({
-                        type: 'zammad-ticket-accepted',
+                        type: singleTab.acceptedType,
                         requestId: data.requestId,
-                        tabId: tabId,
+                        tabId,
                     });
                     window.focus();
                     window.location.replace(data.url);
-                } else if (data.type === 'zammad-ticket-accepted' && data.requestId === activeRequestId) {
+                    return;
+                }
+
+                if (data.type === singleTab.acceptedType && data.requestId === activeRequestId) {
                     requestHandled = true;
                     closeDuplicateZammadTab();
                 }
             });
 
-            if (sessionStorage.getItem(allowLoadKey) === '1') {
-                sessionStorage.removeItem(allowLoadKey);
-                sessionStorage.setItem(establishedKey, '1');
-                console.log('zammad existing ticket tab established', tabId, targetUrl);
+            if (sessionStorage.getItem(singleTab.allowLoadKey) === '1') {
+                sessionStorage.removeItem(singleTab.allowLoadKey);
+                markSingleTabEstablished(tabId, targetUrl);
                 return true;
             }
 
-            if (sessionStorage.getItem(establishedKey) === '1') {
-                console.log('zammad existing ticket tab ready', tabId, targetUrl);
+            if (sessionStorage.getItem(singleTab.establishedKey) === '1') {
+                debug('zammad existing tab ready', tabId, targetUrl);
                 return true;
             }
 
-            if (isExistingTabEnabled()) {
-                activeRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                console.log('zammad probing for existing ticket tab', activeRequestId, targetUrl);
-                window.stop();
-                channel.postMessage({
-                    type: 'zammad-ticket-request',
-                    requestId: activeRequestId,
-                    tabId: tabId,
-                    url: targetUrl,
-                });
-
-                setTimeout(function() {
-                    if (requestHandled) {
-                        return;
-                    }
-
-                    sessionStorage.setItem(allowLoadKey, '1');
-                    window.location.replace(targetUrl);
-                }, 750);
-
-                return false;
+            if (!isExistingTabEnabled()) {
+                markSingleTabEstablished(tabId, targetUrl);
+                return true;
             }
 
-            return true;
-        }
-        catch (e) {
+            activeRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            debug('zammad probing for existing tab', activeRequestId, targetUrl);
+            window.stop();
+            channel.postMessage({
+                type: singleTab.requestType,
+                requestId: activeRequestId,
+                tabId,
+                url: targetUrl,
+            });
+
+            setTimeout(() => {
+                if (requestHandled) {
+                    return;
+                }
+
+                sessionStorage.setItem(singleTab.allowLoadKey, '1');
+                window.location.replace(targetUrl);
+            }, singleTab.probeDelay);
+
+            return false;
+        } catch (e) {
             console.error('checkExistingInstance error:', e);
             return true;
         }
     }
 
-    function getZammadTicketUrl() {
-        return window.location.hash.startsWith('#ticket/') ? window.location.href : false;
+    function getReusableHelpUrl() {
+        return isReusableHelpLocation(window.location) ? window.location.href : false;
+    }
+
+    function isReusableHelpLocation(location) {
+        return location.origin === HELP_ORIGIN && !isKnowledgeBasePath(location.pathname);
+    }
+
+    function isReusableHelpUrl(url) {
+        try {
+            const parsedUrl = new URL(url, window.location.href);
+            return isReusableHelpLocation(parsedUrl);
+        } catch (e) {
+            console.error('help URL parse error:', e);
+            return false;
+        }
+    }
+
+    function isKnowledgeBasePath(pathname) {
+        return pathname === KB_PATH || pathname.startsWith(`${KB_PATH}/`);
     }
 
     function isExistingTabEnabled() {
@@ -408,7 +343,7 @@
                 return true;
             }
 
-            const parsedConfig = (typeof savedConfig === 'string') ? JSON.parse(savedConfig) : savedConfig;
+            const parsedConfig = typeof savedConfig === 'string' ? JSON.parse(savedConfig) : savedConfig;
             return Object.prototype.hasOwnProperty.call(parsedConfig, 'existingTab') ? Boolean(parsedConfig.existingTab) : true;
         } catch (e) {
             console.error('existingTab config read error:', e);
@@ -417,17 +352,21 @@
     }
 
     function getSingleTabId() {
-        const key = 'zammad-ticket-tab-id';
-        let tabId = sessionStorage.getItem(key);
+        let tabId = sessionStorage.getItem(singleTab.tabIdKey);
         if (!tabId) {
             tabId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            sessionStorage.setItem(key, tabId);
+            sessionStorage.setItem(singleTab.tabIdKey, tabId);
         }
         return tabId;
     }
 
+    function markSingleTabEstablished(tabId, targetUrl) {
+        sessionStorage.setItem(singleTab.establishedKey, '1');
+        debug('zammad existing tab established', tabId, targetUrl);
+    }
+
     function closeDuplicateZammadTab() {
-        console.log('zammad closing duplicate ticket tab');
+        debug('zammad closing duplicate tab');
         window.stop();
         window.close();
         setTimeout(() => {
@@ -438,7 +377,8 @@
     }
 
     async function loadDependencies() {
-        for (const url of dependencyUrls) {
+        for (const [name, url] of dependencies) {
+            debug(`Loading ${name}`);
             await loadDependency(url);
         }
     }
@@ -453,148 +393,103 @@
         (0, eval)(`${code}\n//# sourceURL=${url}`);
     }
 
-    // const closeTicket = () => {
-    //     $('#navigation .tasks .is-active .js-close').trigger('click');
-    // };
+    const collapseEntries = (collapse = false, root = document) => {
+        const articleSelector = '.ticket-article-item';
+        const expandedSelector = '.textBubble-overflowContainer.is-open:not(.hide)';
+        const collapsedSelector = '.textBubble-overflowContainer:not(.is-open):not(.hide)';
+        const activeSelector = collapse ? expandedSelector : collapsedSelector;
 
-    // const nextTicket = () => {
-    //     var t, el, n;
-    //     (t = $('#navigation .tasks .is-active')).get(0) && (el = t.next()).get(0) ? (el.find('div').first().trigger('click')) : (n = $('#navigation .tasks .task').first()).get(0) ? (n.find('div').first().trigger('click')) : void 0;
-    // };
-
-    // const prevTicket = () => {
-    //     var t, el, n;
-    //     (t = $('#navigation .tasks .is-active')).get(0) && (n = t.prev()).get(0) ? (n.find('div').first().trigger('click')) : (el = $('#navigation .tasks .task').last()).get(0) ? (el.find('div').first().trigger('click')) : void 0;
-    // };
-
-    const collapseEntries = (action, root) => {
-        if (action === undefined) {
-          action = false;
-        }
-
-        if (root === undefined) {
-            root = document;
-        }
-
-        const articleSelector = ".ticket-article-item";
-        const expandedSelector = ".textBubble-overflowContainer.is-open:not(.hide)";
-        const collapsedSelector = ".textBubble-overflowContainer:not(.is-open):not(.hide)";
-        const toggleFoldClass = "js-toggleFold";
-
-        let activeSelector = (action) ? expandedSelector : collapsedSelector;
-        // const elements = root.querySelectorAll(articleSelector);
-        root.querySelectorAll(articleSelector)
-          .forEach((elt) => {
-            if (elt.querySelector(activeSelector)) {
-              elt.getElementsByClassName(toggleFoldClass)[0].click();
+        root.querySelectorAll(articleSelector).forEach((article) => {
+            const toggle = article.querySelector('.js-toggleFold');
+            if (toggle && article.querySelector(activeSelector)) {
+                toggle.click();
             }
         });
     };
 
     const clearNotifications = () => {
-        const activitySelector = "div.popover div.activity-entry";
-        const activityLinkSelector = "div.activity-body a.activity-message";
-
-        // enable reverse sorting of jQuery output
-        jQuery.fn.reverse = [].reverse;
-
-        // Get all notification activity elements
-        let t = $(activitySelector).reverse();
-        // let origCount = t.length;
-
-        // Build array of ticket numbers
-        let tickets = t.find(activityLinkSelector).map(function(i,el) { return $(el).attr('href').match(/\d+/); }).get();
-
-        // Count duplicates
+        const activitySelector = 'div.popover div.activity-entry';
+        const activityLinkSelector = 'div.activity-body a.activity-message';
+        const activityRemoveSelector = 'div.activity-remove';
+        const entries = Array.from(document.querySelectorAll(activitySelector)).reverse();
         const countByTicket = {};
-        for (let i = 0; i < tickets.length; i++) {
-            let ele = tickets[i];
-            if (countByTicket[ele]) {
-              countByTicket[ele] += 1;
-            } else {
-              countByTicket[ele] = 1;
+
+        entries.forEach((entry) => {
+            const ticket = getNotificationTicket(entry, activityLinkSelector);
+            if (ticket) {
+                countByTicket[ticket] = (countByTicket[ticket] || 0) + 1;
             }
-        }
+        });
 
-        // Remove duplicates starting with the oldest entries
-        t.each(function(){
-          let key = $(this).find(activityLinkSelector).attr('href').match(/\d+/);
-
-          if (countByTicket[key] > 1) {
-            $(this).find("div.activity-remove").click();
-            countByTicket[key]--;
-          }
+        entries.forEach((entry) => {
+            const ticket = getNotificationTicket(entry, activityLinkSelector);
+            const removeButton = entry.querySelector(activityRemoveSelector);
+            if (ticket && removeButton && countByTicket[ticket] > 1) {
+                removeButton.click();
+                countByTicket[ticket]--;
+            }
         });
     };
 
+    function getNotificationTicket(entry, activityLinkSelector) {
+        const href = entry.querySelector(activityLinkSelector)?.getAttribute('href') || '';
+        return href.match(/\d+/)?.[0] || null;
+    }
+
     const replyLast = () => {
-        const articleSelector = "div.ticket-article-item";
-        const internalSelector = ".is-internal";
-        const agentSelector = ".agent";
-        const customerSelector = ".customer";
-        // const activeArticleSelector = ".active.content .article-new .articleNewEdit-body";
+        const articles = Array.from(document.querySelectorAll('div.ticket-article-item:not(.is-internal)'));
+        const response = articles.filter((article) => article.classList.contains('customer')).pop()
+            || articles.filter((article) => article.classList.contains('agent')).pop();
+        const actions = response ? Array.from(response.querySelectorAll("a.article-action[data-type^='emailReply']")) : [];
+        const action = actions.pop();
 
-        // Get non-internal articles
-        let articles = $(articleSelector).not(internalSelector);
-
-        // Find the last customer response
-        let response = $(articles).filter(customerSelector).last();
-
-        // If customer response not found, then try to locate agent response
-        if (response.length == 0) {
-            response = $(articles).filter(agentSelector).last();
-        }
-
-        // Reply to located response
-        if (response.length) {
-            // Click "reply all" if present; otherwise click "reply"
-            $(response).find("a.article-action[data-type^='emailReply']").last().get(0).click();
-
-            // waitForKeyElements(activeArticleSelector, (element) => {
-            //     // remove text after signature block
-            //     $(element).find('div[data-signature=true]').siblings('div').remove();
-            // });
+        if (action) {
+            action.click();
         }
     };
 
     const selectionToBlockquote = () => {
-        var selection = window.getSelection();
-        if (selection.rangeCount > 0) {
-          var range = selection.getRangeAt(0);
-          var newNode = document.createElement('blockquote');
-          newNode.appendChild(range.extractContents());
-          range.insertNode(newNode);
-        }
-    }
+        wrapSelection(() => {
+            const wrapper = document.createElement('blockquote');
+            return {wrapper, target: wrapper};
+        });
+    };
 
     const selectionToPreCode = () => {
-        var selection = window.getSelection();
-        if (selection.rangeCount > 0) {
-          var range = selection.getRangeAt(0);
+        wrapSelection(() => {
+            const wrapper = document.createElement('pre');
+            const target = document.createElement('code');
+            wrapper.appendChild(target);
+            return {wrapper, target};
+        });
+    };
 
-          var preNode = document.createElement('pre');
-          var codeNode = document.createElement('code');
-
-          preNode.appendChild(codeNode);
-          codeNode.appendChild(range.extractContents());
-          range.insertNode(preNode);
+    function wrapSelection(createWrapper) {
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) {
+            return;
         }
+
+        const range = selection.getRangeAt(0);
+        const {wrapper, target} = createWrapper();
+        target.appendChild(range.extractContents());
+        range.insertNode(wrapper);
     }
 
     const customHotkeysFilter = (event) => {
-        // hotkey is effective only when filter return true
         const target = event.target || event.srcElement;
-        const {tagName} = target;
-        let flag = true;
-
-        // allow hotkey on new article element
-        if (event.target.classList.contains('articleNewEdit-body')) {
-            // allow hotkeys when focus is on new article textarea
-
-        } else if (target.isContentEditable || ((tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') && !target.readOnly)) {
-        // ignore: isContentEditable === 'true', <input> and <textarea> when readOnly state is false, <select>
-            flag = false;
+        if (!target) {
+            return true;
         }
-        return flag;
+
+        if (target.classList?.contains('articleNewEdit-body')) {
+            return true;
+        }
+
+        const tagName = target.tagName;
+        return !(
+            target.isContentEditable
+            || ((tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') && !target.readOnly)
+        );
     };
 })();
