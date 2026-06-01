@@ -1,24 +1,21 @@
 // ==UserScript==
 // @name     Zammad customizations
 // @match    https://help.vates.tech/*
-// @version  1.1.17
+// @version  1.1.18
 // @license      GPL-v3
 // @author       DanP2
 // @grant              GM_getValue
 // @grant              GM_setValue
-// @grant              GM.getValue
-// @grant              GM.setValue
 // @grant              GM_registerMenuCommand
 // @grant              GM_addStyle
-// @grant              GM_xmlhttpRequest
 // @grant              window.close
-// @connect            cdn.jsdelivr.net
 // @icon               https://avatars.githubusercontent.com/u/1380327?s=200&v=4
 // @run-at             document-start
+// @noframes
 // @description        Customize Zammad
 // ==/UserScript==
 
-/* global GM_getValue, GM_info, GM_registerMenuCommand, GM_addStyle, GM_xmlhttpRequest, waitForKeyElements */
+/* global GM_getValue, GM_setValue, GM_info, GM_registerMenuCommand, GM_addStyle */
 
 (function() {
     'use strict';
@@ -36,13 +33,21 @@
         acceptedType: 'zammad-ticket-accepted',
         probeDelay: 750,
     };
-    const dependencies = [
-        ['waitForKeyElements', 'https://cdn.jsdelivr.net/gh/CoeJoder/waitForKeyElements.js@v1.2/waitForKeyElements.js'],
-        ['GM_config', 'https://cdn.jsdelivr.net/gh/sizzlemctwizzle/GM_config@master/gm_config.js'],
+    const settingsPanelId = 'zammad-custom-settings-panel';
+    const settingsOverlayId = 'zammad-custom-settings-overlay';
+    const baseSettingFields = [
+        {name: 'closeNotification', section: 'Notifications', label: 'Close notifications when clicked?', defaultValue: true},
+        {name: 'requireAlt', label: 'Require Alt key?', defaultValue: false},
+        {name: 'existingTab', section: 'External Links', label: 'Open in existing tab?', defaultValue: true},
+        {name: 'ticketExtended', section: 'Tickets', label: 'Use extended view?', defaultValue: false},
+        {name: 'articleResize', section: 'Articles', label: 'Control click to expand / collapse?', defaultValue: true},
+        {name: 'articleHideBlocked', label: 'Hide blocked remote content message?', defaultValue: true},
+    ];
+    const diagnosticSettingFields = [
+        {name: 'debugLogging', section: 'Diagnostics', label: 'Enable debug logging?', defaultValue: false},
     ];
 
     let gmc;
-    let GMConfig;
     const isMac = navigator.platform.toUpperCase().includes('MAC');
 
     if (!checkExistingInstance()) {
@@ -58,9 +63,7 @@
         {saveName: 'addFormatBlock', key: 'b', code: 'KeyB', default: true, desc: 'Format blockquote tag', selectionOnly: true, func: () => wrapSelection('blockquote')},
     ];
 
-    loadDependencies()
-        .then(setupScript)
-        .catch((e) => logFailure('dependency load error:', e));
+    setupScript();
 
     function debug(...args) {
         if (gmc?.get?.('debugLogging')) {
@@ -78,59 +81,251 @@
     }
 
     function setupScript() {
-        GM_addStyle('.ticket-article.extended { max-width: 10000px; }');
-        if (!GMConfig) {
-            logFailure('GM_config is not loaded');
-            return;
-        }
-
-        gmc = new GMConfig(buildConfig());
+        GM_addStyle(`
+            .ticket-article.extended { max-width: 10000px; }
+            #${settingsOverlayId} {
+                align-items: center;
+                background: rgba(0, 0, 0, 0.35);
+                bottom: 0;
+                display: flex;
+                justify-content: center;
+                left: 0;
+                position: fixed;
+                right: 0;
+                top: 0;
+                z-index: 9999;
+            }
+            #${settingsPanelId} {
+                background: #fff;
+                border: 1px solid #888;
+                border-radius: 3px;
+                box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+                color: #222;
+                font: 13px/1.4 Arial, sans-serif;
+                max-height: min(535px, calc(100vh - 24px));
+                overflow: auto;
+                padding: 16px;
+                width: min(435px, calc(100vw - 24px));
+            }
+            #${settingsPanelId} h2 {
+                font-size: 18px;
+                margin: 0 0 12px;
+            }
+            #${settingsPanelId} h3 {
+                border-bottom: 1px solid #ddd;
+                font-size: 14px;
+                margin: 16px 0 8px;
+                padding-bottom: 4px;
+            }
+            #${settingsPanelId} label {
+                align-items: center;
+                display: flex;
+                gap: 8px;
+                margin: 8px 0;
+            }
+            #${settingsPanelId} .zammad-custom-settings-actions {
+                display: flex;
+                gap: 8px;
+                justify-content: flex-end;
+                margin-top: 16px;
+            }
+        `);
+        gmc = createSettingsController();
         document.addEventListener('keydown', handleHotkey, true);
+        onInit();
     }
 
-    function buildConfig() {
-        const checkbox = (label, defaultValue, section) => ({
-            ...(section ? {section} : {}),
-            label,
-            labelPos: 'right',
-            type: 'checkbox',
-            default: defaultValue,
+    function getSettingFields() {
+        return [
+            ...baseSettingFields,
+            ...addedHotkeys.map((hotkey, index) => ({
+                name: hotkey.saveName,
+                section: index === 0 ? 'Hotkeys' : null,
+                label: `Enable "${hotkey.desc}"? (${formatHotkey(hotkey)})`,
+                defaultValue: hotkey.default,
+            })),
+            ...diagnosticSettingFields,
+        ];
+    }
+
+    function getDefaultSettings() {
+        return getSettingFields().reduce((settings, field) => {
+            settings[field.name] = field.defaultValue;
+            return settings;
+        }, {});
+    }
+
+    function readRawSettings() {
+        try {
+            const storedSettings = GM_getValue(configId, null);
+            if (!storedSettings) {
+                return {};
+            }
+
+            const parsedSettings = typeof storedSettings === 'string'
+                ? JSON.parse(storedSettings)
+                : storedSettings;
+            return parsedSettings && typeof parsedSettings === 'object' ? parsedSettings : {};
+        } catch (e) {
+            logFailure('settings read error:', e);
+            return {};
+        }
+    }
+
+    function readConfigSetting(name, defaultValue) {
+        const rawSettings = readRawSettings();
+        if (!Object.prototype.hasOwnProperty.call(rawSettings, name)) {
+            return defaultValue;
+        }
+
+        return coerceBoolean(rawSettings[name], defaultValue);
+    }
+
+    function normalizeSettings(rawSettings) {
+        const settings = getDefaultSettings();
+
+        getSettingFields().forEach((field) => {
+            if (Object.prototype.hasOwnProperty.call(rawSettings, field.name)) {
+                settings[field.name] = coerceBoolean(rawSettings[field.name], field.defaultValue);
+            }
         });
-        const cfg = {
-            id: configId,
-            title: 'Script Settings',
-            frameStyle: `
-                height: 535px;
-                width: 435px;
-                border: 1px solid;
-                border-radius: 3px;
-                position: fixed;
-                z-index: 9999;
-            `,
-            fields: {
-                closeNotification: checkbox('Close notifications when clicked?', true, ['Notifications', '']),
-                requireAlt: checkbox('Require Alt key?', false),
-                existingTab: checkbox('Open in existing tab?', true, ['External Links', '']),
-                ticketExtended: checkbox('Use extended view?', false, ['Tickets', '']),
-                articleResize: checkbox('Control click to expand / collapse?', true, ['Articles', '']),
-                articleHideBlocked: checkbox('Hide blocked remote content message?', true),
-                debugLogging: checkbox('Enable debug logging?', false, ['Diagnostics', '']),
+
+        return settings;
+    }
+
+    function coerceBoolean(value, defaultValue) {
+        if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'value')) {
+            return coerceBoolean(value.value, defaultValue);
+        }
+
+        if (typeof value === 'boolean') {
+            return value;
+        }
+
+        if (typeof value === 'string') {
+            if (value === 'true' || value === '1') {
+                return true;
+            }
+
+            if (value === 'false' || value === '0') {
+                return false;
+            }
+
+            return defaultValue;
+        }
+
+        return typeof value === 'undefined' ? defaultValue : Boolean(value);
+    }
+
+    function saveSettings(settings) {
+        GM_setValue(configId, settings);
+    }
+
+    function createSettingsController() {
+        let settings = normalizeSettings(readRawSettings());
+        const controller = {
+            get(name) {
+                return Object.prototype.hasOwnProperty.call(settings, name)
+                    ? settings[name]
+                    : getDefaultSettings()[name];
             },
-            events: {
-                init: onInit,
-                save: onSave,
+            save(nextSettings) {
+                settings = normalizeSettings(nextSettings);
+                saveSettings(settings);
             },
+            open() {
+                openSettingsPanel(settings, (nextSettings) => {
+                    controller.save(nextSettings);
+                    onSave();
+                });
+            },
+            close: closeSettingsPanel,
         };
 
-        addedHotkeys.forEach((hotkey, index) => {
-            cfg.fields[hotkey.saveName] = checkbox(
-                `Enable "${hotkey.desc}"? (${formatHotkey(hotkey)})`,
-                hotkey.default,
-                index === 0 ? ['Hotkeys', 'Add hotkeys'] : null,
-            );
+        return controller;
+    }
+
+    function openSettingsPanel(settings, onSubmit) {
+        closeSettingsPanel();
+
+        const overlay = document.createElement('div');
+        overlay.id = settingsOverlayId;
+
+        const panel = document.createElement('section');
+        panel.id = settingsPanelId;
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-modal', 'true');
+        panel.setAttribute('aria-labelledby', 'zammad-custom-settings-title');
+
+        const form = document.createElement('form');
+        const title = document.createElement('h2');
+        title.id = 'zammad-custom-settings-title';
+        title.textContent = 'Script Settings';
+        form.appendChild(title);
+
+        let currentSection = null;
+        getSettingFields().forEach((field) => {
+            if (field.section && field.section !== currentSection) {
+                const heading = document.createElement('h3');
+                heading.textContent = field.section;
+                form.appendChild(heading);
+                currentSection = field.section;
+            }
+
+            const label = document.createElement('label');
+            const input = document.createElement('input');
+            const text = document.createElement('span');
+            input.type = 'checkbox';
+            input.name = field.name;
+            input.checked = Boolean(settings[field.name]);
+            text.textContent = field.label;
+            label.append(input, text);
+            form.appendChild(label);
         });
 
-        return cfg;
+        const actions = document.createElement('div');
+        actions.className = 'zammad-custom-settings-actions';
+
+        const cancelButton = document.createElement('button');
+        cancelButton.type = 'button';
+        cancelButton.textContent = 'Cancel';
+        cancelButton.addEventListener('click', closeSettingsPanel);
+
+        const saveButton = document.createElement('button');
+        saveButton.type = 'submit';
+        saveButton.textContent = 'Save';
+
+        actions.append(cancelButton, saveButton);
+        form.appendChild(actions);
+
+        form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            const nextSettings = {...settings};
+            getSettingFields().forEach((field) => {
+                nextSettings[field.name] = Boolean(form.elements[field.name]?.checked);
+            });
+            onSubmit(nextSettings);
+        });
+
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) {
+                closeSettingsPanel();
+            }
+        });
+        overlay.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                closeSettingsPanel();
+            }
+        });
+
+        panel.appendChild(form);
+        overlay.appendChild(panel);
+        (document.body || document.documentElement).appendChild(overlay);
+        saveButton.focus();
+    }
+
+    function closeSettingsPanel() {
+        document.getElementById(settingsOverlayId)?.remove();
     }
 
     function onInit() {
@@ -144,7 +339,7 @@
 
         GM_registerMenuCommand('Settings', () => gmc.open());
 
-        waitForKeyElements(popoverSelector, (element) => {
+        waitForElements(popoverSelector, (element) => {
             element.addEventListener('click', (event) => {
                 const link = getEventElement(event)?.closest(notificationLinkSelector);
                 if (!link || !gmc.get('closeNotification') || (gmc.get('requireAlt') && !event.altKey)) {
@@ -155,21 +350,23 @@
             });
         });
 
-        waitForKeyElements(appSelector, (element) => {
+        waitForElements(appSelector, (element) => {
             onElementInserted(element, ticketItemSelector, triggerHashChange);
         });
 
-        document.body.addEventListener('click', (event) => {
-            const bubble = getEventElement(event)?.closest('.textBubble');
-            if (!bubble || !gmc.get('articleResize') || !event.ctrlKey) {
-                return;
-            }
+        waitForElements('body', (body) => {
+            body.addEventListener('click', (event) => {
+                const bubble = getEventElement(event)?.closest('.textBubble');
+                if (!bubble || !gmc.get('articleResize') || !event.ctrlKey) {
+                    return;
+                }
 
-            event.stopImmediatePropagation();
-            Array.from(bubble.querySelectorAll('.js-toggleFold'))
-                .find(isVisible)
-                ?.click();
-        });
+                event.stopImmediatePropagation();
+                Array.from(bubble.querySelectorAll('.js-toggleFold'))
+                    .find(isVisible)
+                    ?.click();
+            });
+        }, {once: true});
 
         const applyTicketDisplaySettings = () => {
             const hideBlocked = gmc.get('articleHideBlocked');
@@ -199,6 +396,49 @@
 
     function isVisible(element) {
         return Boolean(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
+    }
+
+    function waitForElements(selector, callback, {root = document.documentElement, once = false} = {}) {
+        const seen = new WeakSet();
+        const MutationObserver = window.MutationObserver || window.WebKitMutationObserver;
+        let matched = false;
+        let observer;
+
+        const notify = (element) => {
+            if (!seen.has(element)) {
+                seen.add(element);
+                matched = true;
+                callback(element);
+                if (once && observer) {
+                    observer.disconnect();
+                }
+            }
+        };
+        const scan = (node) => {
+            if (node.nodeType !== Node.ELEMENT_NODE) {
+                return;
+            }
+
+            if (node.matches(selector)) {
+                notify(node);
+            }
+
+            node.querySelectorAll(selector).forEach(notify);
+        };
+
+        document.querySelectorAll(selector).forEach(notify);
+
+        if ((once && matched) || !root || !MutationObserver) {
+            return null;
+        }
+
+        observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                mutation.addedNodes.forEach(scan);
+            });
+        });
+        observer.observe(root, {childList: true, subtree: true});
+        return observer;
     }
 
     function onElementInserted(container, elementSelector, callback) {
@@ -300,13 +540,14 @@
 
                 if (data.type === singleTab.acceptedType && data.requestId === activeRequestId) {
                     requestHandled = true;
+                    channel.close();
                     closeDuplicateZammadTab();
                 }
             });
 
             if (sessionStorage.getItem(singleTab.allowLoadKey) === '1') {
                 sessionStorage.removeItem(singleTab.allowLoadKey);
-                markSingleTabEstablished(tabId, targetUrl);
+                markSingleTabEstablished();
                 return true;
             }
 
@@ -316,11 +557,11 @@
             }
 
             if (!isExistingTabEnabled()) {
-                markSingleTabEstablished(tabId, targetUrl);
+                markSingleTabEstablished();
                 return true;
             }
 
-            activeRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            activeRequestId = createUniqueId();
             debug('single-tab probe started');
             window.stop();
             channel.postMessage({
@@ -336,6 +577,7 @@
                 }
 
                 sessionStorage.setItem(singleTab.allowLoadKey, '1');
+                channel.close();
                 window.location.replace(targetUrl);
             }, singleTab.probeDelay);
 
@@ -373,30 +615,27 @@
             return gmc.get('existingTab');
         }
 
-        try {
-            const savedConfig = GM_getValue(configId, null);
-            if (!savedConfig) {
-                return true;
-            }
-
-            const parsedConfig = typeof savedConfig === 'string' ? JSON.parse(savedConfig) : savedConfig;
-            return Object.prototype.hasOwnProperty.call(parsedConfig, 'existingTab') ? Boolean(parsedConfig.existingTab) : true;
-        } catch (e) {
-            logFailure('existingTab setting read error:', e);
-            return true;
-        }
+        return readConfigSetting('existingTab', true);
     }
 
     function getSingleTabId() {
         let tabId = sessionStorage.getItem(singleTab.tabIdKey);
         if (!tabId) {
-            tabId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            tabId = createUniqueId();
             sessionStorage.setItem(singleTab.tabIdKey, tabId);
         }
         return tabId;
     }
 
-    function markSingleTabEstablished(tabId, targetUrl) {
+    function createUniqueId() {
+        if (window.crypto?.randomUUID) {
+            return window.crypto.randomUUID();
+        }
+
+        return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+
+    function markSingleTabEstablished() {
         sessionStorage.setItem(singleTab.establishedKey, '1');
         debug('single-tab established');
     }
@@ -410,41 +649,6 @@
             window.location.replace('about:blank');
         }, 50);
         setTimeout(() => window.close(), 250);
-    }
-
-    async function loadDependencies() {
-        for (const [name, url] of dependencies) {
-            debug(`Loading ${name}`);
-            await loadDependency(name, url);
-        }
-    }
-
-    async function loadDependency(name, url) {
-        const code = await getDependencyCode(url);
-        if (name === 'GM_config') {
-            GMConfig = eval(`${code}\nGM_config;`); // eslint-disable-line no-eval
-            return;
-        }
-
-        (0, eval)(`${code}\n//# sourceURL=${url}`);
-    }
-
-    function getDependencyCode(url) {
-        return new Promise((resolve, reject) => {
-            GM_xmlhttpRequest({
-                method: 'GET',
-                url,
-                onload: (response) => {
-                    if (response.status >= 200 && response.status < 300) {
-                        resolve(response.responseText);
-                    } else {
-                        reject(new Error(`Failed to load ${url}: ${response.status}`));
-                    }
-                },
-                onerror: () => reject(new Error(`Failed to load ${url}`)),
-                ontimeout: () => reject(new Error(`Timed out loading ${url}`)),
-            });
-        });
     }
 
     const collapseEntries = (collapse = false, root = document) => {
