@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name     Zammad customizations
 // @match    https://help.vates.tech/*
-// @version  1.1.18
+// @version  1.1.20
 // @license      GPL-v3
 // @author       DanP2
 // @grant              GM_getValue
@@ -46,9 +46,29 @@
     const diagnosticSettingFields = [
         {name: 'debugLogging', section: 'Diagnostics', label: 'Enable debug logging?', defaultValue: false},
     ];
+    const selectors = {
+        activityEntry: '.activity-entry',
+        activityRemove: 'div.activity-remove',
+        app: 'div#app',
+        blockedContentMessage: 'div.remote-content-message',
+        collapsedArticle: '.textBubble-overflowContainer:not(.is-open):not(.hide)',
+        expandedArticle: '.textBubble-overflowContainer.is-open:not(.hide)',
+        notificationEntry: 'div.popover div.activity-entry',
+        notificationLink: 'div.activity-body a.activity-message',
+        notificationPopover: 'div.popover--notifications',
+        replyAction: "a.article-action[data-type^='emailReply']",
+        textBubble: '.textBubble',
+        ticketArticle: 'div.ticket-article',
+        ticketArticleItem: 'div.ticket-article-item',
+        ticketArticleItemNonInternal: 'div.ticket-article-item:not(.is-internal)',
+        ticketTitle: '.ticket-title-update, .js-objectTitle',
+        toggleFold: '.js-toggleFold',
+        newArticleBody: '.articleNewEdit-body',
+    };
 
     let gmc;
     const isMac = navigator.platform.toUpperCase().includes('MAC');
+    const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 
     if (!checkExistingInstance()) {
         return;
@@ -62,6 +82,19 @@
         {saveName: 'addFormatCode', key: 'c', code: 'KeyC', default: true, desc: 'Format code tag', selectionOnly: true, func: () => wrapSelection('pre', 'code')},
         {saveName: 'addFormatBlock', key: 'b', code: 'KeyB', default: true, desc: 'Format blockquote tag', selectionOnly: true, func: () => wrapSelection('blockquote')},
     ];
+    const settingFields = [
+        ...baseSettingFields,
+        ...addedHotkeys.map((hotkey, index) => ({
+            name: hotkey.saveName,
+            section: index === 0 ? 'Hotkeys' : null,
+            label: `Enable "${hotkey.desc}"? (${formatHotkey(hotkey)})`,
+            defaultValue: hotkey.default,
+        })),
+        ...diagnosticSettingFields,
+    ];
+    const defaultSettings = Object.fromEntries(
+        settingFields.map(({name, defaultValue}) => [name, defaultValue]),
+    );
 
     setupScript();
 
@@ -179,26 +212,6 @@
         onInit();
     }
 
-    function getSettingFields() {
-        return [
-            ...baseSettingFields,
-            ...addedHotkeys.map((hotkey, index) => ({
-                name: hotkey.saveName,
-                section: index === 0 ? 'Hotkeys' : null,
-                label: `Enable "${hotkey.desc}"? (${formatHotkey(hotkey)})`,
-                defaultValue: hotkey.default,
-            })),
-            ...diagnosticSettingFields,
-        ];
-    }
-
-    function getDefaultSettings() {
-        return getSettingFields().reduce((settings, field) => {
-            settings[field.name] = field.defaultValue;
-            return settings;
-        }, {});
-    }
-
     function readRawSettings() {
         try {
             const storedSettings = GM_getValue(configId, null);
@@ -218,7 +231,7 @@
 
     function readConfigSetting(name, defaultValue) {
         const rawSettings = readRawSettings();
-        if (!Object.prototype.hasOwnProperty.call(rawSettings, name)) {
+        if (!hasOwn(rawSettings, name)) {
             return defaultValue;
         }
 
@@ -226,10 +239,10 @@
     }
 
     function normalizeSettings(rawSettings) {
-        const settings = getDefaultSettings();
+        const settings = {...defaultSettings};
 
-        getSettingFields().forEach((field) => {
-            if (Object.prototype.hasOwnProperty.call(rawSettings, field.name)) {
+        settingFields.forEach((field) => {
+            if (hasOwn(rawSettings, field.name)) {
                 settings[field.name] = coerceBoolean(rawSettings[field.name], field.defaultValue);
             }
         });
@@ -238,7 +251,7 @@
     }
 
     function coerceBoolean(value, defaultValue) {
-        if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'value')) {
+        if (value && typeof value === 'object' && hasOwn(value, 'value')) {
             return coerceBoolean(value.value, defaultValue);
         }
 
@@ -269,9 +282,9 @@
         let settings = normalizeSettings(readRawSettings());
         const controller = {
             get(name) {
-                return Object.prototype.hasOwnProperty.call(settings, name)
+                return hasOwn(settings, name)
                     ? settings[name]
-                    : getDefaultSettings()[name];
+                    : defaultSettings[name];
             },
             save(nextSettings) {
                 settings = normalizeSettings(nextSettings);
@@ -289,63 +302,78 @@
         return controller;
     }
 
+    function createElement(tagName, props = {}, children = []) {
+        const element = document.createElement(tagName);
+
+        Object.entries(props).forEach(([key, value]) => {
+            if (value == null) {
+                return;
+            }
+
+            if (key === 'attrs') {
+                Object.entries(value).forEach(([name, attrValue]) => element.setAttribute(name, attrValue));
+            } else if (key === 'on') {
+                Object.entries(value).forEach(([eventName, handler]) => element.addEventListener(eventName, handler));
+            } else if (key in element) {
+                element[key] = value;
+            } else {
+                element.setAttribute(key, value);
+            }
+        });
+
+        element.append(...children);
+        return element;
+    }
+
     function openSettingsPanel(settings, onSubmit) {
         closeSettingsPanel();
 
-        const overlay = document.createElement('div');
-        overlay.id = settingsOverlayId;
-
-        const panel = document.createElement('section');
-        panel.id = settingsPanelId;
-        panel.setAttribute('role', 'dialog');
-        panel.setAttribute('aria-modal', 'true');
-        panel.setAttribute('aria-labelledby', 'zammad-custom-settings-title');
-
-        const form = document.createElement('form');
-        const title = document.createElement('h2');
-        title.id = 'zammad-custom-settings-title';
-        title.textContent = 'Script Settings';
-        form.appendChild(title);
+        const overlay = createElement('div', {id: settingsOverlayId});
+        const panel = createElement('section', {
+            id: settingsPanelId,
+            attrs: {
+                role: 'dialog',
+                'aria-modal': 'true',
+                'aria-labelledby': 'zammad-custom-settings-title',
+            },
+        });
+        const form = createElement('form');
+        form.append(createElement('h2', {
+            id: 'zammad-custom-settings-title',
+            textContent: 'Script Settings',
+        }));
 
         let currentSection = null;
-        getSettingFields().forEach((field) => {
+        settingFields.forEach((field) => {
             if (field.section && field.section !== currentSection) {
-                const heading = document.createElement('h3');
-                heading.textContent = field.section;
-                form.appendChild(heading);
+                form.append(createElement('h3', {textContent: field.section}));
                 currentSection = field.section;
             }
 
-            const label = document.createElement('label');
-            const input = document.createElement('input');
-            const text = document.createElement('span');
-            input.type = 'checkbox';
-            input.name = field.name;
-            input.checked = Boolean(settings[field.name]);
-            text.textContent = field.label;
-            label.append(input, text);
-            form.appendChild(label);
+            form.append(createElement('label', {}, [
+                createElement('input', {
+                    type: 'checkbox',
+                    name: field.name,
+                    checked: Boolean(settings[field.name]),
+                }),
+                createElement('span', {textContent: field.label}),
+            ]));
         });
 
-        const actions = document.createElement('div');
-        actions.className = 'zammad-custom-settings-actions';
-
-        const cancelButton = document.createElement('button');
-        cancelButton.type = 'button';
-        cancelButton.textContent = 'Cancel';
-        cancelButton.addEventListener('click', closeSettingsPanel);
-
-        const saveButton = document.createElement('button');
-        saveButton.type = 'submit';
-        saveButton.textContent = 'Save';
-
-        actions.append(cancelButton, saveButton);
-        form.appendChild(actions);
+        const saveButton = createElement('button', {type: 'submit', textContent: 'Save'});
+        form.append(createElement('div', {className: 'zammad-custom-settings-actions'}, [
+            createElement('button', {
+                type: 'button',
+                textContent: 'Cancel',
+                on: {click: closeSettingsPanel},
+            }),
+            saveButton,
+        ]));
 
         form.addEventListener('submit', (event) => {
             event.preventDefault();
             const nextSettings = {...settings};
-            getSettingFields().forEach((field) => {
+            settingFields.forEach((field) => {
                 nextSettings[field.name] = Boolean(form.elements[field.name]?.checked);
             });
             onSubmit(nextSettings);
@@ -362,9 +390,9 @@
             }
         });
 
-        panel.appendChild(form);
-        overlay.appendChild(panel);
-        (document.body || document.documentElement).appendChild(overlay);
+        panel.append(form);
+        overlay.append(panel);
+        (document.body || document.documentElement).append(overlay);
         saveButton.focus();
     }
 
@@ -373,40 +401,32 @@
     }
 
     function onInit() {
-        const popoverSelector = 'div.popover--notifications';
-        const notificationLinkSelector = 'div.js-items > div.activity-entry > div.activity-body > a.activity-message';
-        const activityRemoveSelector = 'div.activity-remove';
-        const appSelector = 'div#app';
-        const ticketSelector = 'div.ticket-article';
-        const ticketItemSelector = 'div.ticket-article-item';
-        const blockedContentSelector = 'div.remote-content-message';
-
         GM_registerMenuCommand('Settings', () => gmc.open());
 
-        waitForElements(popoverSelector, (element) => {
+        waitForElements(selectors.notificationPopover, (element) => {
             element.addEventListener('click', (event) => {
-                const link = getEventElement(event)?.closest(notificationLinkSelector);
+                const link = getEventElement(event)?.closest(selectors.notificationLink);
                 if (!link || !gmc.get('closeNotification') || (gmc.get('requireAlt') && !event.altKey)) {
                     return;
                 }
 
-                link.closest('.activity-entry')?.querySelector(activityRemoveSelector)?.click();
+                link.closest(selectors.activityEntry)?.querySelector(selectors.activityRemove)?.click();
             });
         });
 
-        waitForElements(appSelector, (element) => {
-            onElementInserted(element, ticketItemSelector, triggerHashChange);
+        waitForElements(selectors.app, (element) => {
+            waitForElements(selectors.ticketArticleItem, triggerHashChange, {root: element});
         });
 
         waitForElements('body', (body) => {
             body.addEventListener('click', (event) => {
-                const bubble = getEventElement(event)?.closest('.textBubble');
+                const bubble = getEventElement(event)?.closest(selectors.textBubble);
                 if (!bubble || !gmc.get('articleResize') || !event.ctrlKey) {
                     return;
                 }
 
                 event.stopImmediatePropagation();
-                Array.from(bubble.querySelectorAll('.js-toggleFold'))
+                Array.from(bubble.querySelectorAll(selectors.toggleFold))
                     .find(isVisible)
                     ?.click();
             });
@@ -416,11 +436,11 @@
             const hideBlocked = gmc.get('articleHideBlocked');
             const extended = gmc.get('ticketExtended');
 
-            document.querySelectorAll(blockedContentSelector)
+            document.querySelectorAll(selectors.blockedContentMessage)
                 .forEach((message) => {
                     message.style.display = hideBlocked ? 'none' : '';
                 });
-            document.querySelectorAll(ticketSelector)
+            document.querySelectorAll(selectors.ticketArticle)
                 .forEach((ticket) => ticket.classList.toggle('extended', extended));
         };
 
@@ -470,7 +490,11 @@
             node.querySelectorAll(selector).forEach(notify);
         };
 
-        document.querySelectorAll(selector).forEach(notify);
+        if (root?.nodeType === Node.ELEMENT_NODE && root.matches(selector)) {
+            notify(root);
+        }
+
+        (root || document).querySelectorAll(selector).forEach(notify);
 
         if ((once && matched) || !root || !MutationObserver) {
             return null;
@@ -482,34 +506,6 @@
             });
         });
         observer.observe(root, {childList: true, subtree: true});
-        return observer;
-    }
-
-    function onElementInserted(container, elementSelector, callback) {
-        const target = typeof container === 'string' ? document.querySelector(container) : container;
-        const MutationObserver = window.MutationObserver || window.WebKitMutationObserver;
-
-        if (!target || !MutationObserver) {
-            return null;
-        }
-
-        const observer = new MutationObserver((mutations) => {
-            mutations.forEach((mutation) => {
-                mutation.addedNodes.forEach((node) => {
-                    if (node.nodeType !== Node.ELEMENT_NODE) {
-                        return;
-                    }
-
-                    if (node.matches(elementSelector)) {
-                        callback(node);
-                    }
-
-                    node.querySelectorAll(elementSelector).forEach(callback);
-                });
-            });
-        });
-
-        observer.observe(target, {childList: true, subtree: true});
         return observer;
     }
 
@@ -696,13 +692,10 @@
     }
 
     const collapseEntries = (collapse = false, root = document) => {
-        const articleSelector = '.ticket-article-item';
-        const expandedSelector = '.textBubble-overflowContainer.is-open:not(.hide)';
-        const collapsedSelector = '.textBubble-overflowContainer:not(.is-open):not(.hide)';
-        const activeSelector = collapse ? expandedSelector : collapsedSelector;
+        const activeSelector = collapse ? selectors.expandedArticle : selectors.collapsedArticle;
 
-        root.querySelectorAll(articleSelector).forEach((article) => {
-            const toggle = article.querySelector('.js-toggleFold');
+        root.querySelectorAll(selectors.ticketArticleItem).forEach((article) => {
+            const toggle = article.querySelector(selectors.toggleFold);
             if (toggle && article.querySelector(activeSelector)) {
                 toggle.click();
             }
@@ -710,22 +703,19 @@
     };
 
     const clearNotifications = () => {
-        const activitySelector = 'div.popover div.activity-entry';
-        const activityLinkSelector = 'div.activity-body a.activity-message';
-        const activityRemoveSelector = 'div.activity-remove';
-        const entries = Array.from(document.querySelectorAll(activitySelector)).reverse();
+        const entries = Array.from(document.querySelectorAll(selectors.notificationEntry)).reverse();
         const countByTicket = new Map();
 
         entries.forEach((entry) => {
-            const ticket = getNotificationTicket(entry, activityLinkSelector);
+            const ticket = getNotificationTicket(entry);
             if (ticket) {
                 countByTicket.set(ticket, (countByTicket.get(ticket) || 0) + 1);
             }
         });
 
         entries.forEach((entry) => {
-            const ticket = getNotificationTicket(entry, activityLinkSelector);
-            const removeButton = entry.querySelector(activityRemoveSelector);
+            const ticket = getNotificationTicket(entry);
+            const removeButton = entry.querySelector(selectors.activityRemove);
             const count = countByTicket.get(ticket) || 0;
 
             if (ticket && removeButton && count > 1) {
@@ -735,13 +725,13 @@
         });
     };
 
-    function getNotificationTicket(entry, activityLinkSelector) {
-        const href = entry.querySelector(activityLinkSelector)?.getAttribute('href') || '';
+    function getNotificationTicket(entry) {
+        const href = entry.querySelector(selectors.notificationLink)?.getAttribute('href') || '';
         return href.match(/\d+/)?.[0] || null;
     }
 
     function findLastArticleByClass(...classNames) {
-        const articles = document.querySelectorAll('div.ticket-article-item:not(.is-internal)');
+        const articles = document.querySelectorAll(selectors.ticketArticleItemNonInternal);
         for (const className of classNames) {
             for (let index = articles.length - 1; index >= 0; index--) {
                 if (articles[index].classList.contains(className)) {
@@ -755,7 +745,7 @@
 
     const replyLast = () => {
         const response = findLastArticleByClass('customer', 'agent');
-        Array.from(response?.querySelectorAll("a.article-action[data-type^='emailReply']") || [])
+        Array.from(response?.querySelectorAll(selectors.replyAction) || [])
             .pop()
             ?.click();
     };
@@ -795,11 +785,11 @@
             return true;
         }
 
-        if (target.closest?.('.articleNewEdit-body')) {
+        if (target.closest?.(selectors.newArticleBody)) {
             return true;
         }
 
-        if (target.closest?.('.ticket-title-update, .js-objectTitle')) {
+        if (target.closest?.(selectors.ticketTitle)) {
             return !hotkey.selectionOnly;
         }
 
