@@ -85,7 +85,7 @@
             .ticket-article.extended { max-width: 10000px; }
             #${settingsOverlayId} {
                 align-items: center;
-                background: rgba(0, 0, 0, 0.35);
+                background: rgba(0, 0, 0, 0.62);
                 bottom: 0;
                 display: flex;
                 justify-content: center;
@@ -96,23 +96,27 @@
                 z-index: 9999;
             }
             #${settingsPanelId} {
-                background: #fff;
-                border: 1px solid #888;
+                background: #24262b;
+                border: 1px solid #555b66;
                 border-radius: 3px;
-                box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
-                color: #222;
-                font: 13px/1.4 Arial, sans-serif;
+                box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+                box-sizing: border-box;
+                color: #f2f4f7;
+                color-scheme: dark;
+                font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
                 max-height: min(535px, calc(100vh - 24px));
                 overflow: auto;
                 padding: 16px;
                 width: min(435px, calc(100vw - 24px));
             }
             #${settingsPanelId} h2 {
+                color: #ffffff;
                 font-size: 18px;
                 margin: 0 0 12px;
             }
             #${settingsPanelId} h3 {
-                border-bottom: 1px solid #ddd;
+                border-bottom: 1px solid #464b55;
+                color: #dfe7f2;
                 font-size: 14px;
                 margin: 16px 0 8px;
                 padding-bottom: 4px;
@@ -122,12 +126,52 @@
                 display: flex;
                 gap: 8px;
                 margin: 8px 0;
+                color: #eef1f5;
+            }
+            #${settingsPanelId} input[type="checkbox"] {
+                accent-color: #31a873;
+                flex: 0 0 auto;
+                height: 14px;
+                width: 14px;
             }
             #${settingsPanelId} .zammad-custom-settings-actions {
                 display: flex;
                 gap: 8px;
                 justify-content: flex-end;
                 margin-top: 16px;
+            }
+            #${settingsPanelId} .zammad-custom-settings-actions button {
+                border: 1px solid #67707d !important;
+                border-radius: 3px !important;
+                box-shadow: none !important;
+                cursor: pointer;
+                font: 600 13px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+                min-width: 74px;
+                padding: 7px 12px !important;
+                text-shadow: none !important;
+            }
+            #${settingsPanelId} .zammad-custom-settings-actions button[type="button"] {
+                background: #353a43 !important;
+                color: #f3f5f8 !important;
+            }
+            #${settingsPanelId} .zammad-custom-settings-actions button[type="button"]:hover,
+            #${settingsPanelId} .zammad-custom-settings-actions button[type="button"]:focus {
+                background: #424957 !important;
+                color: #ffffff !important;
+            }
+            #${settingsPanelId} .zammad-custom-settings-actions button[type="submit"] {
+                background: #247a5a !important;
+                border-color: #2b946d !important;
+                color: #ffffff !important;
+            }
+            #${settingsPanelId} .zammad-custom-settings-actions button[type="submit"]:hover,
+            #${settingsPanelId} .zammad-custom-settings-actions button[type="submit"]:focus {
+                background: #2c946d !important;
+                color: #ffffff !important;
+            }
+            #${settingsPanelId} .zammad-custom-settings-actions button:focus-visible {
+                outline: 2px solid #7dd3fc;
+                outline-offset: 2px;
             }
         `);
         gmc = createSettingsController();
